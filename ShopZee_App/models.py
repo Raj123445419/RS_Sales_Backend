@@ -28,7 +28,7 @@ class User(AbstractUser):
       help_text=(
           'The groups this user belongs to. A user will get all permissions'
           ' granted to each of their groups.'
-      ),
+      ),    
       related_name='shopzee_user_set',
       related_query_name='shopzee_user',
   )
