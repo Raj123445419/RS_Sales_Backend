@@ -91,49 +91,41 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
 
 
-User = get_user_model()
-
 @csrf_exempt
 def login_api(request):
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
-            email_input = data.get('identifier', '').strip().lower() # ફ્રન્ટએન્ડમાંથી ઈમેલ આવશે
+            email_input = data.get('identifier', '').strip().lower() # ફ્રન્ટએન્ડમાંથી આવેલો ઈમેલ
             password_input = data.get('password', '').strip()
 
             if not email_input or not password_input:
                 return JsonResponse({'success': False, 'error': 'Please enter both email and password.'}, status=400)
 
-            # 1. માત્ર ઈમેલથી યુઝર શોધો
+            # 1. તમારા કસ્ટમ User ટેબલમાંથી ઈમેલથી યુઝર શોધો
             try:
                 user_obj = User.objects.get(email__iexact=email_input)
             except User.DoesNotExist:
                 return JsonResponse({'success': False, 'error': 'User not found with this email.'}, status=404)
 
-            # 2. ડેટાબેઝના પાસવર્ડ સાથે મેચ કરો (હેશ કે પ્લેન ટેક્સ્ટ બંને માટે)
+            # 2. પાસવર્ડ ચેક કરો (પ્લેન ટેક્સ્ટ અથવા હેશ થયેલો બંને કામ કરશે)
             password_matched = False
             if user_obj.password == password_input or user_obj.check_password(password_input):
                 password_matched = True
 
             if password_matched:
                 if user_obj.is_active:
-                    # રોલ ઓટો-ડિટેક્ટ
-                    detected_role = 'shopkeeper'
-                    if user_obj.is_superuser or user_obj.role == 'admin':
-                        detected_role = 'admin'
-                    elif user_obj.is_staff or user_obj.role == 'salesman':
-                        detected_role = 'salesman'
-                    elif user_obj.role:
-                        detected_role = user_obj.role.lower()
+                    # 3. તમારા મોડેલની અંદર આપેલો role ડાયરેક્ટ લો (admin, salesman, shopkeeper)
+                    user_role = (user_obj.role or 'shopkeeper').lower()
 
                     return JsonResponse({
                         'success': True,
-                        'message': f'Successfully logged in as {detected_role.capitalize()}!',
+                        'message': f'Successfully logged in as {user_role.capitalize()}!',
                         'user': {
                             'id': user_obj.id,
                             'username': user_obj.username,
                             'email': user_obj.email,
-                            'role': detected_role
+                            'role': user_role
                         }
                     })
                 else:
