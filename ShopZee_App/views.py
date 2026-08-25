@@ -3,6 +3,9 @@ from rest_framework import viewsets
 from django.contrib.auth import authenticate
 from django.http import JsonResponse
 import json
+from django.contrib.auth import authenticate, get_user_model
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 from .models import (
     Category,
     Customer,
@@ -87,24 +90,58 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
 
 
-  from django.contrib.auth import authenticate
-from django.http import JsonResponse
-import json
 
-def admin_login_api(request):
+User = get_user_model()
+
+@csrf_exempt
+def login_api(request):
     if request.method == 'POST':
-        data = json.loads(request.body)
-        email_or_username = data.get('email')
-        password = data.get('password')
-        role = data.get('role')
+        try:
+            data = json.loads(request.body)
+            email_input = data.get('identifier', '').strip().lower() # ફ્રન્ટએન્ડમાંથી ઈમેલ આવશે
+            password_input = data.get('password', '').strip()
 
-        if role == 'admin':
-            # Django ના authentication બેઝથી યુઝર ચેક કરવો
-            user = authenticate(username=email_or_username, password=password)
-            
-            if user is not None and (user.is_staff or user.is_superuser):
-                return JsonResponse({'isAdmin': True, 'message': 'Success'})
+            if not email_input or not password_input:
+                return JsonResponse({'success': False, 'error': 'Please enter both email and password.'}, status=400)
+
+            # 1. માત્ર ઈમેલથી યુઝર શોધો
+            try:
+                user_obj = User.objects.get(email__iexact=email_input)
+            except User.DoesNotExist:
+                return JsonResponse({'success': False, 'error': 'User not found with this email.'}, status=404)
+
+            # 2. ડેટાબેઝના પાસવર્ડ સાથે મેચ કરો (હેશ કે પ્લેન ટેક્સ્ટ બંને માટે)
+            password_matched = False
+            if user_obj.password == password_input or user_obj.check_password(password_input):
+                password_matched = True
+
+            if password_matched:
+                if user_obj.is_active:
+                    # રોલ ઓટો-ડિટેક્ટ
+                    detected_role = 'shopkeeper'
+                    if user_obj.is_superuser or user_obj.role == 'admin':
+                        detected_role = 'admin'
+                    elif user_obj.is_staff or user_obj.role == 'salesman':
+                        detected_role = 'salesman'
+                    elif user_obj.role:
+                        detected_role = user_obj.role.lower()
+
+                    return JsonResponse({
+                        'success': True,
+                        'message': f'Successfully logged in as {detected_role.capitalize()}!',
+                        'user': {
+                            'id': user_obj.id,
+                            'username': user_obj.username,
+                            'email': user_obj.email,
+                            'role': detected_role
+                        }
+                    })
+                else:
+                    return JsonResponse({'success': False, 'error': 'Account is disabled.'}, status=403)
             else:
-                return JsonResponse({'isAdmin': False, 'error': 'You are not in admin list or data'}, status=401)
+                return JsonResponse({'success': False, 'error': 'Incorrect password.'}, status=401)
                 
-        return JsonResponse({'isAdmin': True})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+    
+    return JsonResponse({'error': 'Only POST method allowed'}, status=405)
