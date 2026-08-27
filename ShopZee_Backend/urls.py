@@ -51,6 +51,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/v1/login/', views.login_api, name='login_api'),
     path('api/v1/dashboard-stats/', views.admin_dashboard_api, name='admin_dashboard_api'),
+    path('api/v1/orders-page/', views.orders_page_api, name='orders_page_api'),
     path('api/v1/', include(router.urls)),
 
 ]

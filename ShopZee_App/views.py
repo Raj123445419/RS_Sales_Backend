@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import json
+from django.db.models import Q
 from django.contrib.auth import authenticate, get_user_model  # આ લાઈન પરફેક્ટ છે
 from django.db.models import Count, Sum
 from django.http import JsonResponse
@@ -279,13 +280,13 @@ def admin_dashboard_api(request):
             if 'coca' in name_lower or 'coke' in name_lower:
                 assigned_color = '#D71920'  # Red
             elif 'pepsi' in name_lower:
-                assigned_color = '#2563EB'  # Blue
+                assigned_color = '#4223BE'  # Blue
             elif 'sprite' in name_lower:
-                assigned_color = '#22C55E'  # Green
+                assigned_color = '#2DA12F'  # Green
             elif 'fanta' in name_lower:
                 assigned_color = '#F97316'  # Orange
             elif 'nescafe' in name_lower or 'coffee' in name_lower:
-                assigned_color = '#6F4E37'  # Brown
+                assigned_color = '#E4C495'  # Brown
             elif 'thumbs up' in name_lower:
                 assigned_color = '#1E3A8A'  # Dark Blue
             elif 'limca' in name_lower:
@@ -304,48 +305,39 @@ def admin_dashboard_api(request):
                 'count': f"{pct}%"
             })
         # 4. Recent Orders
-        recent_orders_qs = Order.objects.prefetch_related(
-            'items__product'
-        ).order_by('-created_at')[:6]
+     # 4. Recent Orders (ડેટાબેઝની ઓરિજિનલ ઓર્ડર આઈડી સાથે)
+        recent_orders_qs = Order.objects.prefetch_related('items__product').order_by('-created_at')[:6]
         recent_orders_data = []
 
         for ord in recent_orders_qs:
             items = ord.items.all()
             first_item = items.first()
-
+            
             if first_item:
                 prod_name = first_item.product.name
-                item_size = (
-                    first_item.size
-                    if hasattr(first_item, 'size') and first_item.size
-                    else 'N/A'
-                )
-                qty_size = f'{first_item.quantity} × {item_size}'
+                item_size = first_item.size if hasattr(first_item, 'size') and first_item.size else 'N/A'
+                qty_size = f"{first_item.quantity} × {item_size}"
             else:
                 prod_name = 'N/A'
                 qty_size = 'N/A'
 
             total_items_count = items.count()
             if total_items_count > 1:
-                prod_display_name = (
-                    f'{prod_name} + {total_items_count - 1} products'
-                )
+                prod_display_name = f"{prod_name} + {total_items_count - 1} products"
             else:
                 prod_display_name = prod_name
 
             raw_status = ord.order_status
             formatted_status = raw_status.replace('_', ' ').title()
-
-            recent_orders_data.append(
-                {
-                    'id': f'#RS10{ord.id}',
-                    'customer': ord.customer.shop_name,
-                    'product': prod_display_name,
-                    'qty': qty_size,
-                    'amount': f'₹{ord.grand_total:,.0f}',
-                    'status': formatted_status,
-                }
-            )
+            
+            recent_orders_data.append({
+                'id': f"#{ord.id}",  # હવે અહીં ડેટાબેઝની અસલી આઈડી (#1, #2, #3, #4) જ દેખાશે
+                'customer': ord.customer.shop_name,
+                'product': prod_display_name,
+                'qty': qty_size,
+                'amount': f"₹{ord.grand_total:,.0f}",
+                'status': formatted_status
+            })
 
         # 5. Salesmen Performance
         salesmen = User.objects.filter(role='salesman')
@@ -397,5 +389,124 @@ def admin_dashboard_api(request):
                 'salesmenPerformance': salesmen_perf_data,
             }
         )
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def orders_page_api(request):
+    try:
+        total_orders_count = Order.objects.count()
+        pending_count = Order.objects.filter(order_status__in=['placed', 'confirmed', 'pending']).count()
+        processing_count = Order.objects.filter(order_status__in=['processing', 'ready_for_delivery', 'out_for_delivery']).count()
+        delivered_count = Order.objects.filter(order_status__in=['delivered', 'completed']).count()
+
+        # Parameters
+        search_query = request.GET.get('search', '').strip()
+        status_filter = request.GET.get('status', 'All')
+        salesman_filter = request.GET.get('salesman', 'All')
+        shopkeeper_filter = request.GET.get('shopkeeper', 'All')
+        payment_filter = request.GET.get('payment', 'All')
+        time_filter = request.GET.get('timeFilter', 'This Week')  # ચાર્ટ માટેનો ટાઈમ ફિલ્ટર
+
+        now = timezone.now()
+        orders_qs = Order.objects.all().order_by('-created_at')
+
+        # --- Order Value Chart Data Generation (ตาม timeFilter) ---
+        chart_data = []
+        if time_filter == 'This Year':
+            for m in range(1, 13):
+                m_sales = Order.objects.filter(created_at__year=now.year, created_at__month=m).aggregate(total=Sum('grand_total'))['total'] or 0
+                month_name = timezone.datetime(now.year, m, 1).strftime('%b')
+                chart_data.append({'day': month_name, 'value': float(m_sales)})
+        elif time_filter == 'This Month':
+            # મહિનાના 4 સપ્તાહ મુજબ
+            chart_data = [
+                {'day': 'Week 1', 'value': float(Order.objects.filter(created_at__year=now.year, created_at__month=now.month, created_at__day__lte=7).aggregate(t=Sum('grand_total'))['t'] or 0)},
+                {'day': 'Week 2', 'value': float(Order.objects.filter(created_at__year=now.year, created_at__month=now.month, created_at__day__gt=7, created_at__day__lte=14).aggregate(t=Sum('grand_total'))['t'] or 0)},
+                {'day': 'Week 3', 'value': float(Order.objects.filter(created_at__year=now.year, created_at__month=now.month, created_at__day__gt=14, created_at__day__lte=21).aggregate(t=Sum('grand_total'))['t'] or 0)},
+                {'day': 'Week 4', 'value': float(Order.objects.filter(created_at__year=now.year, created_at__month=now.month, created_at__day__gt=21).aggregate(t=Sum('grand_total'))['t'] or 0)},
+            ]
+        else:
+            # Default: This Week (Mon - Sun)
+            for i in range(6, -1, -1):
+                d = now.date() - timedelta(days=i)
+                d_sales = Order.objects.filter(created_at__date=d).aggregate(total=Sum('grand_total'))['total'] or 0
+                chart_data.append({'day': d.strftime('%a'), 'value': float(d_sales)})
+
+        # --- Table Filters ---
+        if search_query:
+            orders_qs = orders_qs.filter(
+                Q(id__icontains=search_query) |
+                Q(customer__shop_name__icontains=search_query) |
+                Q(salesman__username__icontains=search_query) |
+                Q(items__product__name__icontains=search_query)
+            ).distinct()
+
+        if status_filter != 'All':
+            formatted_status = status_filter.lower().replace(' ', '_')
+            orders_qs = orders_qs.filter(order_status__iexact=formatted_status)
+
+        if salesman_filter != 'All':
+            orders_qs = orders_qs.filter(salesman__username__iexact=salesman_filter)
+
+        if shopkeeper_filter != 'All':
+            orders_qs = orders_qs.filter(customer__shop_name__iexact=shopkeeper_filter)
+
+        if payment_filter != 'All':
+            orders_qs = orders_qs.filter(payment_detail__payment_status__iexact=payment_filter)
+
+        orders_data = []
+        for ord in orders_qs:
+            items = ord.items.all()
+            first_item = items.first()
+            qty_size = f"{first_item.quantity} × {getattr(first_item, 'size', 'N/A')}" if first_item else 'N/A'
+            products_display = f"{first_item.product.name} + {items.count() - 1} more" if items.count() > 1 else (first_item.product.name if first_item else 'N/A')
+            pay_status = getattr(ord, 'payment_detail', None)
+
+            orders_data.append({
+                'id': f"#{ord.id}",
+                'customer': ord.customer.shop_name if ord.customer else 'N/A',
+                'salesman': ord.salesman.username if ord.salesman else 'Unassigned',
+                'products': products_display,
+                'qty': qty_size,
+                'amount': f"₹{ord.grand_total:,.0f}",
+                'status': ord.order_status.replace('_', ' ').title(),
+                'payment_status': pay_status.payment_status.title() if pay_status else 'Pending',
+                'date': ord.created_at.strftime('%d %b')
+            })
+
+        return JsonResponse({
+            'success': True,
+            'metrics': {
+                'total': f"{total_orders_count:,}",
+                'pending': f"{pending_count:,}",
+                'processing': f"{processing_count:,}",
+                'delivered': f"{delivered_count:,}"
+            },
+            'orderValueChart': chart_data,  # ચાર્ટ માટેનો લાઈવ ડેટા
+            'orders': orders_data,
+            'dropdowns': {
+                'salesmen': list(User.objects.filter(role='salesman').values_list('username', flat=True).distinct()),
+                'shopkeepers': list(Customer.objects.values_list('shop_name', flat=True).distinct())
+            }
+        })
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)

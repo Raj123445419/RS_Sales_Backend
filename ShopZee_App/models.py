@@ -180,6 +180,8 @@ class Order(models.Model):
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
         ('returned', 'Returned'),
+        ('pending', 'Pending'),
+        
     )
 
     DISCOUNT_TYPE_CHOICES = (
@@ -263,9 +265,25 @@ class Order(models.Model):
 
         super().save(*args, **kwargs)
 
+        # 4. AUTO PAYMENT RECORD CREATION & SYNC
+        # જેવો ઓર્ડર બને કે અપડેટ થાય, તરત જ તેનું પેમેન્ટ રેકોર્ડ ઓટોમેટિક સેટ થઈ જશે
+        payment_obj, created = Payment.objects.get_or_create(
+            order=self,
+            defaults={
+                'customer': self.customer,
+                'paid_amount': Decimal('0.00'),
+                'payment_method': 'cash'
+            }
+        )
+        if not created:
+            payment_obj.total_amount = self.grand_total
+            payment_obj.customer = self.customer
+            payment_obj.save()
+        else:
+            payment_obj.save()
+
     def __str__(self):
         return f'Order #{self.id} - {self.customer.shop_name} (Payable: ₹{self.grand_total})'
-
 
 # 8. Order Item Model
 class OrderItem(models.Model):
