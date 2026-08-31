@@ -241,22 +241,26 @@ class Order(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
+        # જો ઓર્ડર પહેલેથી ડેટાબેઝમાં હોય, તો તેની સાથે જોડાયેલી તમામ આઇટમ્સનો સરવાળો કરીને સબટોટલ જાતે જ અપડეტ કરી દેવું
+        if self.pk:
+            calculated_subtotal = sum(item.item_total for item in self.items.all())
+            self.subtotal = calculated_subtotal
+
         # 1. Discount Calculation (₹ or %)
         disc_val = self.discount_value or Decimal('0.00')
         if self.discount_type == 'percent':
-            self.calculated_discount_amount = (
-                self.subtotal * disc_val
-            ) / Decimal('100.00')
+            self.calculated_discount_amount = (self.subtotal * disc_val) / Decimal('100.00')
         else:
             self.calculated_discount_amount = disc_val
 
         # 2. Tax Calculation (₹ or %) applied on subtotal after discount
         taxable_amount = self.subtotal - self.calculated_discount_amount
+        if taxable_amount < 0:
+            taxable_amount = Decimal('0.00')
+            
         tax_val = self.tax_value or Decimal('0.00')
         if self.tax_type == 'percent':
-            self.calculated_tax_amount = (taxable_amount * tax_val) / Decimal(
-                '100.00'
-            )
+            self.calculated_tax_amount = (taxable_amount * tax_val) / Decimal('100.00')
         else:
             self.calculated_tax_amount = tax_val
 
@@ -266,7 +270,6 @@ class Order(models.Model):
         super().save(*args, **kwargs)
 
         # 4. AUTO PAYMENT RECORD CREATION & SYNC
-        # જેવો ઓર્ડર બને કે અપડેટ થાય, તરત જ તેનું પેમેન્ટ રેકોર્ડ ઓટોમેટિક સેટ થઈ જશે
         payment_obj, created = Payment.objects.get_or_create(
             order=self,
             defaults={
@@ -275,12 +278,9 @@ class Order(models.Model):
                 'payment_method': 'cash'
             }
         )
-        if not created:
-            payment_obj.total_amount = self.grand_total
-            payment_obj.customer = self.customer
-            payment_obj.save()
-        else:
-            payment_obj.save()
+        payment_obj.total_amount = self.grand_total
+        payment_obj.customer = self.customer
+        payment_obj.save()
 
     def __str__(self):
         return f'Order #{self.id} - {self.customer.shop_name} (Payable: ₹{self.grand_total})'
@@ -314,9 +314,26 @@ class OrderItem(models.Model):
     item_total = models.DecimalField(max_digits=12, decimal_places=2)
 
     def save(self, *args, **kwargs):
-        self.price = self.product.selling_price
-        self.item_total = self.price * self.quantity
+        # જો પ્રાઇસ મેન્યુઅલ નાખી ન હોય તો પ્રોડક્ટની સેલિંગ પ્રાઇસ લેવી
+        if not self.price and self.product:
+            self.price = self.product.selling_price
+        
+        # આઇટમનું કુલ ટોટલ (પ્રાઇસ × ક્વન્ટિટી) ઓટોમેટિક કેલ્ક્યુલેટ કરવું
+        price_val = self.price or Decimal('0.00')
+        qty_val = Decimal(str(self.quantity or 1))
+        self.item_total = price_val * qty_val
+
         super().save(*args, **kwargs)
+
+        # જ્યારે આઇટમ સેવ કે અપડેટ થાય, ત્યારે તેના પેરેન્ટ ઓર્ડરનું સબટોટલ અને ગ્રાન્ડ ટોટલ પણ ઓટોમેટિક રી-કેલ્ક્યુલેટ થઈ જવું જોઈએ
+        if self.order:
+            self.order.save()
+
+    def delete(self, *args, **kwargs):
+        order_ref = self.order
+        super().delete(*args, **kwargs)
+        if order_ref:
+            order_ref.save()
 
     def __str__(self):
         return f'{self.product.name} ({self.size}) x {self.quantity}'

@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import json
+from decimal import Decimal
 from django.db.models import Q
 from django.contrib.auth import authenticate, get_user_model  # આ લાઈન પરફેક્ટ છે
 from django.db.models import Count, Sum
@@ -258,46 +259,66 @@ def admin_dashboard_api(request):
                     {'label': d.strftime('%a'), 'value': float(d_sales)}
                 )
 
-# 3. Top Selling Products (સ્માર્ટ કલર મેચિંગ સાથે)
+# 3. Top Selling Products 
         top_items = (
             OrderItem.objects.values('product__name')
             .annotate(total_qty=Sum('quantity'))
-            .order_by('-total_qty')[:4]
+            .order_by('-total_qty', 'product__name')[:5]  # -total_qty એટલે સૌથી વધુ વેચાણવાળી પહેલા આવશે
         )
         
-        # ફોલબેક કલર્સ જો લિસ્ટમાં ન હોય તો
         fallback_colors = ['#3F2B96', '#22C55E', '#DEBA89', '#D71920', '#14B8A6']
-        
-        top_products_data = []
         valid_items = [item for item in top_items if item['total_qty'] and item['total_qty'] > 0]
         total_qty_sum = sum(i['total_qty'] for i in valid_items) if valid_items else 0
 
-        for idx, item in enumerate(valid_items):
-            prod_name = item['product__name']
+        raw_percentages = []
+        for item in valid_items:
+            exact_pct = (item['total_qty'] / total_qty_sum * 100) if total_qty_sum > 0 else 0
+            raw_percentages.append({
+                'item': item,
+                'exact': exact_pct,
+                'floor': int(exact_pct),
+                'remainder': exact_pct - int(exact_pct)
+            })
+
+        # ફ્લોર વેલ્યુઝનો સરવાળો કરો
+        current_sum = sum(p['floor'] for p in raw_percentages)
+        difference = 100 - current_sum  # 100 માંથી જેટલી ઘટે (દા.ત. 1%)
+
+        # જેમના રીમેઇન્ડર (Point પછીની રકમ) સૌથી વધુ હોય તેમને 1% વધારીને ટોટલ 100 પૂરા કરો
+        raw_percentages.sort(key=lambda x: x['remainder'], reverse=True)
+        for i in range(abs(difference)):
+            if i < len(raw_percentages):
+                if difference > 0:
+                    raw_percentages[i]['floor'] += 1
+                elif difference < 0 and raw_percentages[i]['floor'] > 0:
+                    raw_percentages[i]['floor'] -= 1
+
+        top_products_data = []
+        for idx, p in enumerate(raw_percentages):
+            prod_name = p['item']['product__name']
             name_lower = prod_name.strip().lower()
-            
-            # સ્માર્ટ કલર અસાઇનમેન્ટ (શબ્દ કન્ટેન થતો હોય તો પરફેક્ટ કલર મળશે)
+            pct = p['floor']
+
+            # સ્માર્ટ કલર અસાઇનમેન્ટ
             if 'coca' in name_lower or 'coke' in name_lower:
-                assigned_color = '#D71920'  # Red
+                assigned_color = '#D71920'
             elif 'pepsi' in name_lower:
-                assigned_color = '#4223BE'  # Blue
+                assigned_color = '#4223BE'
             elif 'sprite' in name_lower:
-                assigned_color = '#2DA12F'  # Green
+                assigned_color = '#2DA12F'
             elif 'fanta' in name_lower:
-                assigned_color = '#F97316'  # Orange
+                assigned_color = '#F97316'
             elif 'nescafe' in name_lower or 'coffee' in name_lower:
-                assigned_color = '#E4C495'  # Brown
+                assigned_color = '#E4C495'
             elif 'thumbs up' in name_lower:
-                assigned_color = '#1E3A8A'  # Dark Blue
+                assigned_color = '#1E3A8A'
             elif 'limca' in name_lower:
-                assigned_color = '#84CC16'  # Lime Green
+                assigned_color = '#84CC16'
             elif 'dew' in name_lower:
-                assigned_color = '#10B981'  # Emerald
+                assigned_color = '#10B981'
             else:
                 assigned_color = fallback_colors[idx % len(fallback_colors)]
 
-            pct = int((item['total_qty'] / total_qty_sum) * 100) if total_qty_sum > 0 else 0
-            
             top_products_data.append({
                 'name': prod_name,
                 'pct': pct,
@@ -356,12 +377,13 @@ def admin_dashboard_api(request):
                 int((float(sm_sales) / target) * 100) if target > 0 else 0
             )
 
+            # પર્સન્ટેજ મુજબ હેક્સ કલર સેટ કર્યા
             if achiev_pct < 40:
-                bar_color = 'bg-red-500'
+                bar_color = '#EF4444'  # Red (Low)
             elif achiev_pct <= 75:
-                bar_color = 'bg-amber-400'
+                bar_color = '#F59E0B'  # Amber / Yellow (Medium)
             else:
-                bar_color = 'bg-emerald-500'
+                bar_color = '#10B981'  # Green / Emerald (High)
 
             salesmen_perf_data.append(
                 {
@@ -370,7 +392,7 @@ def admin_dashboard_api(request):
                     'target': f'₹{target:,.0f}',
                     'achiev': f'{achiev_pct}%',
                     'pct': min(achiev_pct, 100),
-                    'barColor': bar_color,
+                    'barColor': bar_color,  # હેક્સ કલર મોકલ્યો
                 }
             )
 
@@ -394,8 +416,6 @@ def admin_dashboard_api(request):
 
 
 
-
-
 def orders_page_api(request):
     try:
         total_orders_count = Order.objects.count()
@@ -409,12 +429,13 @@ def orders_page_api(request):
         salesman_filter = request.GET.get('salesman', 'All')
         shopkeeper_filter = request.GET.get('shopkeeper', 'All')
         payment_filter = request.GET.get('payment', 'All')
-        time_filter = request.GET.get('timeFilter', 'This Week')  # ચાર્ટ માટેનો ટાઈમ ફિલ્ટર
+        date_filter = request.GET.get('date', 'All')
+        time_filter = request.GET.get('timeFilter', 'This Week')
 
         now = timezone.now()
         orders_qs = Order.objects.all().order_by('-created_at')
 
-        # --- Order Value Chart Data Generation (ตาม timeFilter) ---
+        
         chart_data = []
         if time_filter == 'This Year':
             for m in range(1, 13):
@@ -422,7 +443,6 @@ def orders_page_api(request):
                 month_name = timezone.datetime(now.year, m, 1).strftime('%b')
                 chart_data.append({'day': month_name, 'value': float(m_sales)})
         elif time_filter == 'This Month':
-            # મહિનાના 4 સપ્તાહ મુજબ
             chart_data = [
                 {'day': 'Week 1', 'value': float(Order.objects.filter(created_at__year=now.year, created_at__month=now.month, created_at__day__lte=7).aggregate(t=Sum('grand_total'))['t'] or 0)},
                 {'day': 'Week 2', 'value': float(Order.objects.filter(created_at__year=now.year, created_at__month=now.month, created_at__day__gt=7, created_at__day__lte=14).aggregate(t=Sum('grand_total'))['t'] or 0)},
@@ -430,13 +450,12 @@ def orders_page_api(request):
                 {'day': 'Week 4', 'value': float(Order.objects.filter(created_at__year=now.year, created_at__month=now.month, created_at__day__gt=21).aggregate(t=Sum('grand_total'))['t'] or 0)},
             ]
         else:
-            # Default: This Week (Mon - Sun)
             for i in range(6, -1, -1):
                 d = now.date() - timedelta(days=i)
                 d_sales = Order.objects.filter(created_at__date=d).aggregate(total=Sum('grand_total'))['total'] or 0
                 chart_data.append({'day': d.strftime('%a'), 'value': float(d_sales)})
 
-        # --- Table Filters ---
+        
         if search_query:
             orders_qs = orders_qs.filter(
                 Q(id__icontains=search_query) |
@@ -458,24 +477,30 @@ def orders_page_api(request):
         if payment_filter != 'All':
             orders_qs = orders_qs.filter(payment_detail__payment_status__iexact=payment_filter)
 
+        if date_filter != 'All':
+            if date_filter == 'Today':
+                orders_qs = orders_qs.filter(created_at__date=now.date())
+            elif date_filter == 'This Week':
+                start_week = now - timedelta(days=7)
+                orders_qs = orders_qs.filter(created_at__gte=start_week)
+            elif date_filter == 'This Month':
+                orders_qs = orders_qs.filter(created_at__year=now.year, created_at__month=now.month)
+            elif date_filter == 'This Year':
+                orders_qs = orders_qs.filter(created_at__year=now.year)
+
         orders_data = []
         for ord in orders_qs:
-            items = ord.items.all()
-            first_item = items.first()
-            qty_size = f"{first_item.quantity} × {getattr(first_item, 'size', 'N/A')}" if first_item else 'N/A'
-            products_display = f"{first_item.product.name} + {items.count() - 1} more" if items.count() > 1 else (first_item.product.name if first_item else 'N/A')
-            pay_status = getattr(ord, 'payment_detail', None)
+            payment_obj = getattr(ord, 'payment_detail', None)
+            pay_status = payment_obj.payment_status if payment_obj else 'Pending'
 
             orders_data.append({
                 'id': f"#{ord.id}",
+                'date': ord.created_at.strftime('%d %b %Y'),
                 'customer': ord.customer.shop_name if ord.customer else 'N/A',
                 'salesman': ord.salesman.username if ord.salesman else 'Unassigned',
-                'products': products_display,
-                'qty': qty_size,
                 'amount': f"₹{ord.grand_total:,.0f}",
                 'status': ord.order_status.replace('_', ' ').title(),
-                'payment_status': pay_status.payment_status.title() if pay_status else 'Pending',
-                'date': ord.created_at.strftime('%d %b')
+                'payment_status': pay_status.title()
             })
 
         return JsonResponse({
@@ -486,7 +511,7 @@ def orders_page_api(request):
                 'processing': f"{processing_count:,}",
                 'delivered': f"{delivered_count:,}"
             },
-            'orderValueChart': chart_data,  # ચાર્ટ માટેનો લાઈવ ડેટા
+            'orderValueChart': chart_data,
             'orders': orders_data,
             'dropdowns': {
                 'salesmen': list(User.objects.filter(role='salesman').values_list('username', flat=True).distinct()),
@@ -497,7 +522,88 @@ def orders_page_api(request):
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
+# 2. Create Order API (નવો ઓર્ડર ડેટાબેઝમાં સેવ કરવા માટે)
+@csrf_exempt
+def create_order_api(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            shop_name = data.get('shopkeeper')
+            salesman_name = data.get('salesman')
+            product_id = data.get('product_id')
+            size_selected = data.get('size', '500ml')  # સિલેક્ટ કરેલી સાઈઝ (જેમ કે 250ml, 500ml વગેરે)
+            quantity = int(data.get('quantity', 1))
+            status = data.get('status', 'placed').lower().replace(' ', '_')
+            payment_status = data.get('payment_status', 'pending').lower()
+            
+           
+            discount_val = Decimal(str(data.get('discount_value', '0.00')))
+            discount_type = data.get('discount_type', 'rs')
+            tax_val = Decimal(str(data.get('tax_value', '0.00')))
+            tax_type = data.get('tax_type', 'percent')
 
+            customer = Customer.objects.filter(shop_name__iexact=shop_name).first()
+            salesman = User.objects.filter(username__iexact=salesman_name, role='salesman').first()
+            product = Product.objects.filter(id=product_id).first()
+
+            if not customer:
+                customer = Customer.objects.first()
+            if not product:
+                product = Product.objects.first()
+
+
+            unit_price = product.selling_price if product else Decimal('100.00')
+            
+
+            initial_item_total = unit_price * quantity
+
+
+            new_order = Order.objects.create(
+                customer=customer,
+                salesman=salesman,
+                order_status=status,
+                subtotal=Decimal('0.00'),
+                discount_value=discount_val,
+                discount_type=discount_type,
+                tax_value=tax_val,
+                tax_type=tax_type
+            )
+
+
+            order_item = OrderItem.objects.create(
+                order=new_order,
+                product=product,
+                size=size_selected,
+                quantity=quantity,
+                price=unit_price,
+                item_total=initial_item_total
+            )
+
+
+            calculated_subtotal = sum(item.item_total for item in new_order.items.all())
+
+            new_order.subtotal = calculated_subtotal
+            new_order.save()
+
+
+            if hasattr(new_order, 'payment_detail'):
+                pay_obj = new_order.payment_detail
+                pay_obj.payment_status = payment_status
+                if payment_status == 'paid':
+                    pay_obj.paid_amount = new_order.grand_total
+                pay_obj.save()
+
+            return JsonResponse({
+                'success': True, 
+                'message': 'Order created successfully with auto calculations!',
+                'grand_total': float(new_order.grand_total)
+            })
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+            
+    return JsonResponse({'success': False, 'error': 'Only POST allowed'}, status=405)
+
+# routes
 
 
 def routes_page_api(request):
@@ -507,7 +613,7 @@ def routes_page_api(request):
         salesman_filter = request.GET.get('salesman', 'All')
         area_filter = request.GET.get('area', 'All')
         route_filter = request.GET.get('route', 'All')
-        time_filter = request.GET.get('timeFilter', 'This Week')  # પર્ફોર્મન્સ ચાર્ટ માટેનો ટાઈમ ફિલ્ટર
+        time_filter = request.GET.get('timeFilter', 'This Week') 
 
         now = timezone.now()
         if time_filter == 'This Month':
@@ -536,9 +642,9 @@ def routes_page_api(request):
         if route_filter != 'All':
             routes_qs = routes_qs.filter(name__iexact=route_filter)
 
-        # 1. Routes Table Data
+
         routes_data = []
-        # 2. Route Performance Data (દરેક રૂટનું પર્ફોર્મન્સ પર્સન્ટેજ)
+
         performance_data = []
 
         for rt in routes_qs:
@@ -565,7 +671,7 @@ def routes_page_api(request):
                 'status': status_val
             })
 
-            # પર્ફોર્મન્સ ટકાવારી ગણતરી (જો દુકાનો હોય તો વિઝિટ્સ કે સેલ્સના આધારે, મહત્તમ 100%)
+
             perf_pct = int((visited_count / shops_count * 100) if shops_count > 0 else 0)
             if perf_pct > 100:
                 perf_pct = 100
@@ -575,7 +681,7 @@ def routes_page_api(request):
                 'performance': perf_pct
             })
 
-        # 3. Routes & Shops Section Data
+
         routes_shops_data = []
         customers_qs = Customer.objects.filter(route__isnull=False).select_related('route', 'user')
         if area_filter != 'All':
@@ -604,7 +710,7 @@ def routes_page_api(request):
                     {'label': 'Pending', 'count': 0, 'color': '#D7262D', 'percentage': 0}
                 ]
             },
-            'routePerformance': performance_data,  # લાઈવ પર્ફોર્મન્સ ડેટા
+            'routePerformance': performance_data,  
             'routes': routes_data,
             'routesAndShops': routes_shops_data,
             'dropdowns': {
@@ -618,6 +724,9 @@ def routes_page_api(request):
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
+
+
+# Salesman
 
 
 def salesmen_page_api(request):
