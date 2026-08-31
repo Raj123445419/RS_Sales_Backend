@@ -396,21 +396,6 @@ def admin_dashboard_api(request):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def orders_page_api(request):
     try:
         total_orders_count = Order.objects.count()
@@ -510,3 +495,212 @@ def orders_page_api(request):
         })
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+
+
+
+def routes_page_api(request):
+    try:
+        search_query = request.GET.get('search', '').strip()
+        status_filter = request.GET.get('status', 'All')
+        salesman_filter = request.GET.get('salesman', 'All')
+        area_filter = request.GET.get('area', 'All')
+        route_filter = request.GET.get('route', 'All')
+        time_filter = request.GET.get('timeFilter', 'This Week')  # પર્ફોર્મન્સ ચાર્ટ માટેનો ટાઈમ ફિલ્ટર
+
+        now = timezone.now()
+        if time_filter == 'This Month':
+            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif time_filter == 'This Year':
+            start_date = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif time_filter == 'Today':
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start_date = now - timedelta(days=7)
+
+        routes_qs = Route.objects.all().prefetch_related('customers', 'salesman')
+
+        # --- Filters ---
+        if search_query:
+            routes_qs = routes_qs.filter(
+                Q(name__icontains=search_query) |
+                Q(salesman__username__icontains=search_query) |
+                Q(customers__area__icontains=search_query) |
+                Q(customers__shop_name__icontains=search_query)
+            ).distinct()
+
+        if salesman_filter != 'All':
+            routes_qs = routes_qs.filter(salesman__username__iexact=salesman_filter)
+
+        if route_filter != 'All':
+            routes_qs = routes_qs.filter(name__iexact=route_filter)
+
+        # 1. Routes Table Data
+        routes_data = []
+        # 2. Route Performance Data (દરેક રૂટનું પર્ફોર્મન્સ પર્સન્ટેજ)
+        performance_data = []
+
+        for rt in routes_qs:
+            customers = rt.customers.all()
+            if area_filter != 'All':
+                customers = customers.filter(area__iexact=area_filter)
+                if not customers.exists():
+                    continue
+
+            shops_count = customers.count()
+            visited_count = Visit.objects.filter(route=rt, status='completed', created_at__gte=start_date).count()
+            total_sales = Order.objects.filter(customer__route=rt, created_at__gte=start_date).aggregate(t=Sum('grand_total'))['t'] or 0
+
+            status_val = 'Active' if rt.is_active else 'Completed'
+
+            routes_data.append({
+                'id': rt.id,
+                'route': rt.name,
+                'area': customers.first().area if customers.first() else 'N/A',
+                'salesman': rt.salesman.username if rt.salesman else 'Unassigned',
+                'shops': shops_count,
+                'visited': visited_count,
+                'sales': f"₹{total_sales:,.1f}K" if total_sales > 0 else "₹0.0K",
+                'status': status_val
+            })
+
+            # પર્ફોર્મન્સ ટકાવારી ગણતરી (જો દુકાનો હોય તો વિઝિટ્સ કે સેલ્સના આધારે, મહત્તમ 100%)
+            perf_pct = int((visited_count / shops_count * 100) if shops_count > 0 else 0)
+            if perf_pct > 100:
+                perf_pct = 100
+
+            performance_data.append({
+                'name': rt.name,
+                'performance': perf_pct
+            })
+
+        # 3. Routes & Shops Section Data
+        routes_shops_data = []
+        customers_qs = Customer.objects.filter(route__isnull=False).select_related('route', 'user')
+        if area_filter != 'All':
+            customers_qs = customers_qs.filter(area__iexact=area_filter)
+
+        for cust in customers_qs:
+            routes_shops_data.append({
+                'id': cust.id,
+                'route': cust.route.name if cust.route else 'N/A',
+                'area': cust.area,
+                'shop': cust.shop_name,
+                'salesman': cust.route.salesman.username if (cust.route and cust.route.salesman) else 'Unassigned'
+            })
+
+        total_routes_count = Route.objects.count()
+        active_routes_count = Route.objects.filter(is_active=True).count()
+        completed_routes_count = total_routes_count - active_routes_count
+
+        return JsonResponse({
+            'success': True,
+            'routeStatus': {
+                'total': total_routes_count,
+                'categories': [
+                    {'label': 'Active', 'count': active_routes_count, 'color': '#3525BE', 'percentage': int((active_routes_count / total_routes_count * 100) if total_routes_count > 0 else 0)},
+                    {'label': 'Completed', 'count': completed_routes_count, 'color': '#22A847', 'percentage': int((completed_routes_count / total_routes_count * 100) if total_routes_count > 0 else 0)},
+                    {'label': 'Pending', 'count': 0, 'color': '#D7262D', 'percentage': 0}
+                ]
+            },
+            'routePerformance': performance_data,  # લાઈવ પર્ફોર્મન્સ ડેટા
+            'routes': routes_data,
+            'routesAndShops': routes_shops_data,
+            'dropdowns': {
+                'salesmen': list(User.objects.filter(role='salesman').values_list('username', flat=True).distinct()),
+                'areas': list(Customer.objects.values_list('area', flat=True).distinct()),
+                'routes': list(Route.objects.values_list('name', flat=True).distinct()),
+                'shops': list(Customer.objects.values_list('shop_name', flat=True).distinct())
+            }
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+
+
+def salesmen_page_api(request):
+    try:
+        time_filter = request.GET.get('timeFilter', 'This Week')
+        now = timezone.now()
+
+        if time_filter == 'This Month':
+            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif time_filter == 'This Year':
+            start_date = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif time_filter == 'Today':
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start_date = now - timedelta(days=7)
+
+        salesmen_qs = User.objects.filter(role='salesman')
+        
+        # 1. Stat Cards Metrics
+        total_salesmen_count = salesmen_qs.count()
+        
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_sales = Order.objects.filter(created_at__gte=today_start).aggregate(t=Sum('grand_total'))['t'] or 0
+
+        # 2. Sales Performance List & Average Achievement Calculation
+        sales_performance_data = []
+        table_data = []
+        total_achievement_pct = 0
+
+        for sm in salesmen_qs:
+            sm_orders = Order.objects.filter(salesman=sm, created_at__gte=start_date)
+            sm_sales = sm_orders.aggregate(t=Sum('grand_total'))['t'] or 0
+            target = float(sm.monthly_target) if hasattr(sm, 'monthly_target') and sm.monthly_target else 50000.0
+            achiev_pct = int((float(sm_sales) / target) * 100) if target > 0 else 0
+            if achiev_pct > 100:
+                achiev_pct = 100
+
+            total_achievement_pct += achiev_pct
+
+            sales_performance_data.append({
+                'name': sm.username,
+                'sales': f"₹{sm_sales:,.0f} Sales",
+                'target': f"Target ₹{target:,.0f}",
+                'pct': achiev_pct
+            })
+
+            # Table Data calculations
+            assigned_route = Route.objects.filter(salesman=sm).first()
+            area_name = assigned_route.customers.first().area if (assigned_route and assigned_route.customers.first()) else 'N/A'
+            shops_count = Customer.objects.filter(route=assigned_route).count() if assigned_route else 0
+            orders_count = sm_orders.count()
+            
+            # Status determination
+            status_val = 'Active' if sm.is_active else 'Completed'
+
+            table_data.append({
+                'id': sm.id,
+                'salesman': sm.username,
+                'area': area_name,
+                'shops': shops_count,
+                'orders': orders_count,
+                'sales': f"₹{sm_sales:,.1f}K" if sm_sales > 0 else "₹0.0K",
+                'target': f"₹{target:,.1f}K",
+                'achievement': f"{achiev_pct}%",
+                'status': status_val
+            })
+
+        avg_achievement = int(total_achievement_pct / total_salesmen_count) if total_salesmen_count > 0 else 0
+
+        return JsonResponse({
+            'success': True,
+            'metrics': {
+                'totalSalesmen': total_salesmen_count,
+                'totalSalesToday': f"₹{today_sales:,.0f}",
+                'avgAchievement': f"{avg_achievement}%"
+            },
+            'salesPerformance': sales_performance_data,
+            'salesmenTable': table_data,
+            'dropdowns': {
+                'salesmen': list(salesmen_qs.values_list('username', flat=True).distinct()),
+                'areas': list(Customer.objects.values_list('area', flat=True).distinct()),
+                'statuses': ['Active', 'On Route', 'Completed', 'Pending']
+            }
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)    
