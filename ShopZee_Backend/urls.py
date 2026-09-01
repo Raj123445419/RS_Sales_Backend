@@ -1,19 +1,3 @@
-"""
-URL configuration for ShopZee_Backend project.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/6.1/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
-"""
 from django.contrib import admin
 from ShopZee_App import views
 from django.urls import path, include
@@ -52,14 +36,14 @@ urlpatterns = [
     path('api/v1/login/', views.login_api, name='login_api'),
     path('api/v1/dashboard-stats/', views.admin_dashboard_api, name='admin_dashboard_api'),
     path('api/v1/orders-page/', views.orders_page_api, name='orders_page_api'),
+    path('api/v1/orders/create/', views.create_order_api, name='create_order_api'),
     path('api/v1/routes-page/', views.routes_page_api, name='routes_page_api'),
     path('api/v1/salesmen-page/', views.salesmen_page_api, name='salesmen_page_api'),
+    path('api/v1/orders/<int:order_id>/update/', views.update_order_api, name='update_order_api'),
+    path('api/v1/salesman-detail/<int:pk>/', views.salesman_detail_api, name='salesman_detail_api'),
+    path('api/v1/salesman-update/<int:pk>/', views.salesman_update_api, name='salesman_update_api'),
     path('api/v1/', include(router.urls)),
-
 ]
-
-
-
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

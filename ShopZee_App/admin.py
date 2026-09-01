@@ -78,10 +78,11 @@ class ProductAdmin(admin.ModelAdmin):
     search_fields = ['name', 'sku']
 
 
-# 4. Route Admin
+# 4. Route Admin (Updated with area_name and shop_address)
 @admin.register(Route)
 class RouteAdmin(admin.ModelAdmin):
     list_display = ['name', 'salesman', 'is_active', 'created_at']
+    readonly_fields = ['route_id',]
     list_filter = ['is_active', 'salesman']
     search_fields = ['name']
 

@@ -5,6 +5,7 @@ from django.db.models import Q
 from django.contrib.auth import authenticate, get_user_model  # આ લાઈન પરફેક્ટ છે
 from django.db.models import Count, Sum
 from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
 from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -493,14 +494,22 @@ def orders_page_api(request):
             payment_obj = getattr(ord, 'payment_detail', None)
             pay_status = payment_obj.payment_status if payment_obj else 'Pending'
 
+            # ઓર્ડરની પહેલી આઇટમ મેળવો (જો હોય તો)
+            first_item = ord.items.first()
+
             orders_data.append({
+                'raw_id': ord.id,
                 'id': f"#{ord.id}",
                 'date': ord.created_at.strftime('%d %b %Y'),
                 'customer': ord.customer.shop_name if ord.customer else 'N/A',
                 'salesman': ord.salesman.username if ord.salesman else 'Unassigned',
                 'amount': f"₹{ord.grand_total:,.0f}",
                 'status': ord.order_status.replace('_', ' ').title(),
-                'payment_status': pay_status.title()
+                'payment_status': pay_status.title(),
+                'quantity': first_item.quantity if first_item else 1,
+                'discount_value': float(ord.discount_value),
+                'discount_type': ord.discount_type,
+                'tax_value': float(ord.tax_value)
             })
 
         return JsonResponse({
@@ -513,10 +522,11 @@ def orders_page_api(request):
             },
             'orderValueChart': chart_data,
             'orders': orders_data,
-            'dropdowns': {
-                'salesmen': list(User.objects.filter(role='salesman').values_list('username', flat=True).distinct()),
-                'shopkeepers': list(Customer.objects.values_list('shop_name', flat=True).distinct())
-            }
+    'dropdowns': {
+        'salesmen': list(User.objects.filter(role='salesman').values_list('username', flat=True).distinct()),
+        'shopkeepers': list(Customer.objects.values_list('shop_name', flat=True).distinct()),
+        'products': list(Product.objects.filter(is_active=True).values('id', 'name', 'current_stock'))
+    }
         })
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
@@ -531,33 +541,33 @@ def create_order_api(request):
             shop_name = data.get('shopkeeper')
             salesman_name = data.get('salesman')
             product_id = data.get('product_id')
-            size_selected = data.get('size', '500ml')  # સિલેક્ટ કરેલી સાઈઝ (જેમ કે 250ml, 500ml વગેરે)
             quantity = int(data.get('quantity', 1))
             status = data.get('status', 'placed').lower().replace(' ', '_')
-            payment_status = data.get('payment_status', 'pending').lower()
             
-           
-            discount_val = Decimal(str(data.get('discount_value', '0.00')))
+            discount_val = Decimal(str(data.get('discount_value', '0.00') or '0.00'))
             discount_type = data.get('discount_type', 'rs')
-            tax_val = Decimal(str(data.get('tax_value', '0.00')))
+            tax_val = Decimal(str(data.get('tax_value', '0.00') or '0.00'))
             tax_type = data.get('tax_type', 'percent')
 
+            # કસ્ટમર, સેલ્સમેન અને પ્રોડક્ટ શોધો
             customer = Customer.objects.filter(shop_name__iexact=shop_name).first()
             salesman = User.objects.filter(username__iexact=salesman_name, role='salesman').first()
-            product = Product.objects.filter(id=product_id).first()
+            
+            # જો product_id પાસ ન થયો હોય તો પહેલી પ્રોડક્ટ લેવી
+            if product_id:
+                product = Product.objects.filter(id=product_id).first()
+            else:
+                product = Product.objects.first()
 
             if not customer:
                 customer = Customer.objects.first()
             if not product:
-                product = Product.objects.first()
+                return JsonResponse({'success': False, 'error': 'No products available in database! Please add a product first.'}, status=400)
 
-
-            unit_price = product.selling_price if product else Decimal('100.00')
-            
-
+            unit_price = product.selling_price
             initial_item_total = unit_price * quantity
 
-
+            # ઓર્ડર ક્રિએટ કરો
             new_order = Order.objects.create(
                 customer=customer,
                 salesman=salesman,
@@ -569,33 +579,21 @@ def create_order_api(request):
                 tax_type=tax_type
             )
 
-
-            order_item = OrderItem.objects.create(
+            # ઓર્ડર આઇટમ ક્રિએટ કરો
+            OrderItem.objects.create(
                 order=new_order,
                 product=product,
-                size=size_selected,
                 quantity=quantity,
                 price=unit_price,
                 item_total=initial_item_total
             )
 
-
-            calculated_subtotal = sum(item.item_total for item in new_order.items.all())
-
-            new_order.subtotal = calculated_subtotal
+            # સબટોટલ રી-કેલ્ક્યુલેટ કરવા માટે ઓર્ડર સેવ કરો
             new_order.save()
-
-
-            if hasattr(new_order, 'payment_detail'):
-                pay_obj = new_order.payment_detail
-                pay_obj.payment_status = payment_status
-                if payment_status == 'paid':
-                    pay_obj.paid_amount = new_order.grand_total
-                pay_obj.save()
 
             return JsonResponse({
                 'success': True, 
-                'message': 'Order created successfully with auto calculations!',
+                'message': 'Order created successfully!',
                 'grand_total': float(new_order.grand_total)
             })
         except Exception as e:
@@ -603,9 +601,12 @@ def create_order_api(request):
             
     return JsonResponse({'success': False, 'error': 'Only POST allowed'}, status=405)
 
+
+
+
+
+
 # routes
-
-
 def routes_page_api(request):
     try:
         search_query = request.GET.get('search', '').strip()
@@ -631,6 +632,7 @@ def routes_page_api(request):
         if search_query:
             routes_qs = routes_qs.filter(
                 Q(name__icontains=search_query) |
+                Q(route_id__icontains=search_query) |
                 Q(salesman__username__icontains=search_query) |
                 Q(customers__area__icontains=search_query) |
                 Q(customers__shop_name__icontains=search_query)
@@ -640,11 +642,9 @@ def routes_page_api(request):
             routes_qs = routes_qs.filter(salesman__username__iexact=salesman_filter)
 
         if route_filter != 'All':
-            routes_qs = routes_qs.filter(name__iexact=route_filter)
-
+            routes_qs = routes_qs.filter(Q(name__iexact=route_filter) | Q(route_id__iexact=route_filter))
 
         routes_data = []
-
         performance_data = []
 
         for rt in routes_qs:
@@ -662,15 +662,15 @@ def routes_page_api(request):
 
             routes_data.append({
                 'id': rt.id,
+                'route_id': rt.route_id,
                 'route': rt.name,
                 'area': customers.first().area if customers.first() else 'N/A',
                 'salesman': rt.salesman.username if rt.salesman else 'Unassigned',
                 'shops': shops_count,
                 'visited': visited_count,
-                'sales': f"₹{total_sales:,.1f}K" if total_sales > 0 else "₹0.0K",
+                'sales': f"₹{float(total_sales):,.1f}K" if total_sales > 0 else "₹0.0K",
                 'status': status_val
             })
-
 
             perf_pct = int((visited_count / shops_count * 100) if shops_count > 0 else 0)
             if perf_pct > 100:
@@ -678,9 +678,9 @@ def routes_page_api(request):
 
             performance_data.append({
                 'name': rt.name,
+                'route_id': rt.route_id, # 👇 પર્ફોર્મન્સ માટે પણ route_id ઉમેરી દીધી
                 'performance': perf_pct
             })
-
 
         routes_shops_data = []
         customers_qs = Customer.objects.filter(route__isnull=False).select_related('route', 'user')
@@ -690,8 +690,9 @@ def routes_page_api(request):
         for cust in customers_qs:
             routes_shops_data.append({
                 'id': cust.id,
+                'route_id': cust.route.route_id if cust.route else 'N/A', # 👇 અહીં route_id પાસ કરી દીધી
                 'route': cust.route.name if cust.route else 'N/A',
-                'area': cust.area,
+                'area': cust.area if cust.area else 'N/A',
                 'shop': cust.shop_name,
                 'salesman': cust.route.salesman.username if (cust.route and cust.route.salesman) else 'Unassigned'
             })
@@ -726,9 +727,22 @@ def routes_page_api(request):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Salesman
-
-
 def salesmen_page_api(request):
     try:
         time_filter = request.GET.get('timeFilter', 'This Week')
@@ -813,3 +827,205 @@ def salesmen_page_api(request):
         })
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)    
+
+
+
+
+@csrf_exempt
+def update_order_api(request, order_id):
+    if request.method == 'PUT' or request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            order = Order.objects.filter(id=order_id).first()
+            if not order:
+                return JsonResponse({'success': False, 'error': 'Order not found'}, status=404)
+
+            shop_name = data.get('shopkeeper')
+            salesman_name = data.get('salesman')
+            product_id = data.get('product_id')
+            quantity = int(data.get('quantity', 1))
+            status = data.get('status', 'placed').lower().replace(' ', '_')
+            
+            discount_val = Decimal(str(data.get('discount_value', '0.00') or '0.00'))
+            discount_type = data.get('discount_type', 'rs')
+            tax_val = Decimal(str(data.get('tax_value', '0.00') or '0.00'))
+            tax_type = data.get('tax_type', 'percent')
+
+            # કસ્ટમર અને સેલ્સમેન અપડેટ કરો
+            if shop_name:
+                customer = Customer.objects.filter(shop_name__iexact=shop_name).first()
+                if customer:
+                    order.customer = customer
+
+            if salesman_name:
+                salesman = User.objects.filter(username__iexact=salesman_name, role='salesman').first()
+                if salesman:
+                    order.salesman = salesman
+
+            order.order_status = status
+            order.discount_value = discount_val
+            order.discount_type = discount_type
+            order.tax_value = tax_val
+            order.tax_type = tax_type
+            order.save()
+
+            # ઓર્ડર આઇટમ અપડેટ કરો
+            item = order.items.first()
+            if product_id:
+                product = Product.objects.filter(id=product_id).first()
+                if product:
+                    if not item:
+                        item = OrderItem.objects.create(order=order, product=product, price=product.selling_price)
+                    else:
+                        item.product = product
+                        item.price = product.selling_price
+
+            if item:
+                item.quantity = quantity
+                item.item_total = item.price * quantity
+                item.save()
+
+            # ટોટલ રી-કેલ્ક્યુલેટ કરવા માટે ફરી ઓર્ડર સેવ કરો
+            order.save()
+
+            return JsonResponse({
+                'success': True,
+                'message': 'Order updated successfully!',
+                'grand_total': float(order.grand_total)
+            })
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+    return JsonResponse({'success': False, 'error': 'Only PUT/POST allowed'}, status=405)
+
+
+
+
+
+
+
+
+
+
+def salesman_detail_api(request, pk):
+    try:
+        salesman = get_object_or_404(User, pk=pk, role='salesman')
+        assigned_route = salesman.assigned_routes.first()
+        
+        # Total Sales Calculation
+        orders_qs = Order.objects.filter(customer__route__salesman=salesman)
+        total_sales_sum = orders_qs.aggregate(t=Sum('grand_total'))['t'] or 0
+        orders_count = orders_qs.count()
+        
+        # Target Amount
+        target_amount = 150000.0 
+        
+        # Percentage Calculation
+        if target_amount > 0:
+            achievement_pct = int((float(total_sales_sum) / target_amount) * 100)
+        else:
+            achievement_pct = 0
+
+        # Today's Visits
+        today = timezone.now().date()
+        visits_qs = Visit.objects.filter(route__salesman=salesman, created_at__date=today)
+        visits_data = [{
+            'shopkeeper': v.customer.shop_name if v.customer else 'N/A',
+            'area': v.customer.area if v.customer else 'N/A',
+            'visitTime': v.created_at.strftime('%I:%M %p'),
+            'orderValue': f"₹{v.order_value:,.2f}" if hasattr(v, 'order_value') and v.order_value else "₹0.00",
+            'visitType': 'Order Visit',
+            'status': v.status.capitalize() if v.status else 'Pending'
+        } for v in visits_qs]
+
+        # Recent Orders
+        recent_orders_qs = orders_qs.order_by('-created_at')[:5]
+        orders_data = [{
+            'orderId': o.order_id if hasattr(o, 'order_id') and o.order_id else str(o.id),
+            'shopkeeper': o.customer.shop_name if o.customer else 'N/A',
+            'date': o.created_at.strftime('%d %b %Y'),
+            'amount': f"₹{o.grand_total:,.2f}",
+            'status': o.status.capitalize() if hasattr(o, 'status') and o.status else 'Pending'
+        } for o in recent_orders_qs]
+
+        salesman_data = {
+            'id': salesman.id,
+            'name': salesman.username,
+            'initials': "".join([n[0] for n in salesman.username.split()[:2]]).upper(),
+            'employee_id': f"RS-SM-{salesman.id:03d}",
+            'email': salesman.email if salesman.email else f"{salesman.username.lower()}@ravisales.com",
+            'assigned_route': assigned_route.name if assigned_route else 'Unassigned',
+            'role': salesman.role if hasattr(salesman, 'role') and salesman.role else 'Salesman',
+            'phone': getattr(salesman, 'mobile', '') or getattr(salesman, 'phone', ''),
+            'assigned_area': assigned_route.customers.first().area if (assigned_route and assigned_route.customers.exists()) else 'N/A',
+            'status': 'Active' if salesman.is_active else 'Inactive',
+            'joined_date': salesman.date_joined.strftime('%d %B %Y')
+        }
+        
+        # Dropdowns data
+        all_routes = list(Route.objects.values_list('name', flat=True))
+        all_roles = ['Salesman', 'Manager', 'Admin']
+
+        return JsonResponse({
+            'success': True,
+            'salesman': salesman_data,
+            'metrics': {
+                'totalSales': f"₹{float(total_sales_sum):,.2f}",
+                'ordersCompleted': orders_count,
+                'targetAchievement': f"{achievement_pct}%",
+                'targetAmount': f"₹{target_amount:,.2f}"
+            },
+            'todaysVisits': visits_data,
+            'recentOrders': orders_data,
+            'dropdowns': {
+                'routes': all_routes,
+                'roles': all_roles
+            }
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def salesman_update_api(request, pk):
+    if request.method == 'PUT':
+        try:
+            salesman = get_object_or_404(User, pk=pk, role='salesman')
+            data = json.loads(request.body)
+            
+            # 1. Basic Fields
+            salesman.username = data.get('name', salesman.username)
+            salesman.email = data.get('email', salesman.email)
+            
+            # Phone / Mobile Update
+            phone_val = data.get('phone')
+            if phone_val is not None:
+                if hasattr(salesman, 'mobile'):
+                    salesman.mobile = phone_val
+                elif hasattr(salesman, 'phone'):
+                    salesman.phone = phone_val
+                
+            # 2. Role Update
+            if hasattr(salesman, 'role'):
+                salesman.role = data.get('role', salesman.role)
+                
+            # 3. Status Update
+            status_val = data.get('status', 'Active')
+            salesman.is_active = True if status_val == 'Active' else False
+            salesman.save()
+            
+            # 4. Assigned Route Update
+            route_name = data.get('assigned_route')
+            if route_name:
+                if route_name == 'Unassigned':
+                    # જો અનએસ્સાઇન કરવાનું હોય તો રૂટ સાથેનો સંબંધ હટાવી શકો છો
+                    pass
+                else:
+                    route_obj, created = Route.objects.get_or_create(name=route_name)
+                    route_obj.salesman = salesman
+                    route_obj.save()
+                
+            return JsonResponse({'success': True, 'message': 'Profile updated successfully'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+    return JsonResponse({'success': False, 'error': 'Invalid method'}, status=400)

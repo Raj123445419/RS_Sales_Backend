@@ -84,6 +84,7 @@ class Product(models.Model):
 
 # 4. Route Model
 class Route(models.Model):
+    route_id = models.CharField(max_length=50, unique=True, blank=True)
     name = models.CharField(max_length=100, unique=True)
     salesman = models.ForeignKey(
         User,
@@ -96,8 +97,15 @@ class Route(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        if not self.route_id:
+            last_route = Route.objects.all().order_by('id').last()
+            next_id = 1 if not last_route else last_route.id + 1
+            self.route_id = f"RT-{next_id:03d}"  # આનાથી RT-001
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return self.name
+        return f"{self.route_id} - {self.name}"
 
 
 # 5. Customer / Shopkeeper Profile
@@ -287,28 +295,10 @@ class Order(models.Model):
 
 # 8. Order Item Model
 class OrderItem(models.Model):
-    SIZE_CHOICES = (
-        ('250ml', '250 ml'),
-        ('300ml', '300 ml'),
-        ('330ml', '330 ml'),
-        ('450ml', '450 ml'),
-        ('500ml', '500 ml'),
-        ('600ml', '600 ml'),
-        ('750ml', '750 ml'),
-        ('1L', '1 L'),
-        ('1.25L', '1.25 L'),
-        ('1.5L', '1.5 L'),
-        ('2L', '2 L'),
-        ('2.25L', '2.25 L'),
-    )
-
     order = models.ForeignKey(
         Order, on_delete=models.CASCADE, related_name='items'
     )
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    size = models.CharField(
-        max_length=20, choices=SIZE_CHOICES, default='500ml'
-    )
     quantity = models.PositiveIntegerField(default=1)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     item_total = models.DecimalField(max_digits=12, decimal_places=2)
@@ -336,8 +326,7 @@ class OrderItem(models.Model):
             order_ref.save()
 
     def __str__(self):
-        return f'{self.product.name} ({self.size}) x {self.quantity}'
-
+        return f'{self.product.name} x {self.quantity}'
 
 # 9. Payment Management (Updated to link with Order and auto-calculate pending amount)
 class Payment(models.Model):
