@@ -67,10 +67,11 @@ class CustomerSerializer(serializers.ModelSerializer):
 
 class OrderItemSerializer(serializers.ModelSerializer):
   product_name = serializers.ReadOnlyField(source='product.name')
+  product_size = serializers.ReadOnlyField(source='product.size')
 
   class Meta:
     model = OrderItem
-    fields = ['id', 'product', 'product_name', 'quantity', 'price', 'item_total']
+    fields = ['id', 'product', 'product_name', 'product_size', 'quantity', 'price', 'item_total']
 
 
 class OrderSerializer(serializers.ModelSerializer):

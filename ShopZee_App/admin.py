@@ -68,6 +68,7 @@ class ProductAdmin(admin.ModelAdmin):
     list_display = [
         'name',
         'sku',
+        'size',
         'category',
         'selling_price',
         'mrp',
@@ -75,7 +76,7 @@ class ProductAdmin(admin.ModelAdmin):
         'is_active',
     ]
     list_filter = ['category', 'is_active']
-    search_fields = ['name', 'sku']
+    search_fields = ['name', 'sku', 'size']
 
 
 # 4. Route Admin (Updated with area_name and shop_address)
@@ -101,6 +102,12 @@ class CustomerAdmin(admin.ModelAdmin):
     ]
     list_filter = ['city', 'state', 'status', 'route']
     search_fields = ['shop_name', 'owner_name', 'gst_number', 'city']
+
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "user":
+            kwargs["queryset"] = User.objects.filter(role='shopkeeper')
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
 # 6. OrderItem Inline (ઓર્ડરની અંદર જ પ્રોડક્ટ્સ જોવા માટે)

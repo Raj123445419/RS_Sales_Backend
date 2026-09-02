@@ -10,6 +10,15 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import viewsets
+
+import json
+from django.http import JsonResponse
+from django.db.models import Sum, Q
+from django.utils import timezone
+from django.shortcuts import get_object_or_404
+from django.views.decorators.csrf import csrf_exempt
+from .models import Customer, Order, Visit, User, Route
+
 from .models import (
     Category,
     Customer,
@@ -317,6 +326,8 @@ def admin_dashboard_api(request):
                 assigned_color = '#84CC16'
             elif 'dew' in name_lower:
                 assigned_color = '#10B981'
+            elif 'maaz' in name_lower:
+                assigned_color = '#F7941D'                
             else:
                 assigned_color = fallback_colors[idx % len(fallback_colors)]
 
@@ -647,6 +658,12 @@ def routes_page_api(request):
         routes_data = []
         performance_data = []
 
+        # ડોનટ ચાર્ટ કાઉન્ટ માટેના વેરિયેબલ્સ
+        total_routes_count = routes_qs.count()
+        active_routes_count = 0
+        completed_routes_count = 0
+        pending_routes_count = 0
+
         for rt in routes_qs:
             customers = rt.customers.all()
             if area_filter != 'All':
@@ -655,10 +672,32 @@ def routes_page_api(request):
                     continue
 
             shops_count = customers.count()
-            visited_count = Visit.objects.filter(route=rt, status='completed', created_at__gte=start_date).count()
+            
+            # વિઝિટ્સ મેળવો
+            visits_qs = Visit.objects.filter(route=rt, created_at__gte=start_date)
+            visited_count = visits_qs.filter(status__iexact='completed').count()
             total_sales = Order.objects.filter(customer__route=rt, created_at__gte=start_date).aggregate(t=Sum('grand_total'))['t'] or 0
 
-            status_val = 'Active' if rt.is_active else 'Completed'
+
+            latest_visit = visits_qs.order_by('-created_at').first()
+            if latest_visit:
+                v_status = str(latest_visit.status).lower()
+                if v_status in ['planned', 'ptarted']:
+                    route_status = 'Active'
+                    active_routes_count += 1
+                elif v_status == 'completed':
+                    route_status = 'Completed'
+                    completed_routes_count += 1
+                elif v_status in ['skipped', 'cancelled']:
+                    route_status = 'Pending'
+                    pending_routes_count += 1
+                else:
+                    route_status = 'Active'
+                    active_routes_count += 1
+            else:
+                # જો વિઝિટ જ ન થઈ હોય તો ડિફોલ્ટ Active ગણો
+                route_status = 'Pending'
+                active_routes_count += 1
 
             routes_data.append({
                 'id': rt.id,
@@ -669,7 +708,7 @@ def routes_page_api(request):
                 'shops': shops_count,
                 'visited': visited_count,
                 'sales': f"₹{float(total_sales):,.1f}K" if total_sales > 0 else "₹0.0K",
-                'status': status_val
+                'status': route_status
             })
 
             perf_pct = int((visited_count / shops_count * 100) if shops_count > 0 else 0)
@@ -678,7 +717,7 @@ def routes_page_api(request):
 
             performance_data.append({
                 'name': rt.name,
-                'route_id': rt.route_id, # 👇 પર્ફોર્મન્સ માટે પણ route_id ઉમેરી દીધી
+                'route_id': rt.route_id,
                 'performance': perf_pct
             })
 
@@ -690,25 +729,26 @@ def routes_page_api(request):
         for cust in customers_qs:
             routes_shops_data.append({
                 'id': cust.id,
-                'route_id': cust.route.route_id if cust.route else 'N/A', # 👇 અહીં route_id પાસ કરી દીધી
+                'route_id': cust.route.route_id if cust.route else 'N/A',
                 'route': cust.route.name if cust.route else 'N/A',
                 'area': cust.area if cust.area else 'N/A',
                 'shop': cust.shop_name,
                 'salesman': cust.route.salesman.username if (cust.route and cust.route.salesman) else 'Unassigned'
             })
 
-        total_routes_count = Route.objects.count()
-        active_routes_count = Route.objects.filter(is_active=True).count()
-        completed_routes_count = total_routes_count - active_routes_count
+        # પર્સન્ટેજ કેલ્ક્યુલેશન ડોનટ ચાર્ટ માટે
+        active_pct = int((active_routes_count / total_routes_count * 100) if total_routes_count > 0 else 0)
+        completed_pct = int((completed_routes_count / total_routes_count * 100) if total_routes_count > 0 else 0)
+        pending_pct = int((pending_routes_count / total_routes_count * 100) if total_routes_count > 0 else 0)
 
         return JsonResponse({
             'success': True,
             'routeStatus': {
                 'total': total_routes_count,
                 'categories': [
-                    {'label': 'Active', 'count': active_routes_count, 'color': '#3525BE', 'percentage': int((active_routes_count / total_routes_count * 100) if total_routes_count > 0 else 0)},
-                    {'label': 'Completed', 'count': completed_routes_count, 'color': '#22A847', 'percentage': int((completed_routes_count / total_routes_count * 100) if total_routes_count > 0 else 0)},
-                    {'label': 'Pending', 'count': 0, 'color': '#D7262D', 'percentage': 0}
+                    {'label': 'Active', 'count': active_routes_count, 'color': '#3B82F6', 'percentage': active_pct},       # બ્લૂ કલર (plan, started)
+                    {'label': 'Completed', 'count': completed_routes_count, 'color': '#22A847', 'percentage': completed_pct}, # ગ્રીન કલર (completed)
+                    {'label': 'Pending', 'count': pending_routes_count, 'color': '#D7262D', 'percentage': pending_pct}        # રેડ કલર (skipped, cancelled)
                 ]
             },
             'routePerformance': performance_data,  
@@ -739,10 +779,7 @@ def routes_page_api(request):
 
 
 
-
-
-
-# Salesman
+# salesmen_page_api
 def salesmen_page_api(request):
     try:
         time_filter = request.GET.get('timeFilter', 'This Week')
@@ -757,6 +794,7 @@ def salesmen_page_api(request):
         else:
             start_date = now - timedelta(days=7)
 
+        # 👈 ફેરફાર: અહીં ફક્ત role='salesman' વાળા જ યુઝર્સ આવશે
         salesmen_qs = User.objects.filter(role='salesman')
         
         # 1. Stat Cards Metrics
@@ -802,8 +840,8 @@ def salesmen_page_api(request):
                 'area': area_name,
                 'shops': shops_count,
                 'orders': orders_count,
-                'sales': f"₹{sm_sales:,.1f}K" if sm_sales > 0 else "₹0.0K",
-                'target': f"₹{target:,.1f}K",
+                'sales': f"₹{sm_sales:,.2f}",
+                'target': f"₹{target:,.2f}",
                 'achievement': f"{achiev_pct}%",
                 'status': status_val
             })
@@ -826,11 +864,11 @@ def salesmen_page_api(request):
             }
         })
     except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)    
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
 
-
+# update_order_api
 @csrf_exempt
 def update_order_api(request, order_id):
     if request.method == 'PUT' or request.method == 'POST':
@@ -906,10 +944,11 @@ def update_order_api(request, order_id):
 
 
 
-
+# salesman_detail_api
 def salesman_detail_api(request, pk):
     try:
-        salesman = get_object_or_404(User, pk=pk, role='salesman')
+        # role='salesman' ની શરત હટાવી છે જેથી યુઝર ગાયબ ન થાય
+        salesman = get_object_or_404(User, pk=pk)
         assigned_route = salesman.assigned_routes.first()
         
         # Total Sales Calculation
@@ -945,7 +984,7 @@ def salesman_detail_api(request, pk):
             'shopkeeper': o.customer.shop_name if o.customer else 'N/A',
             'date': o.created_at.strftime('%d %b %Y'),
             'amount': f"₹{o.grand_total:,.2f}",
-            'status': o.status.capitalize() if hasattr(o, 'status') and o.status else 'Pending'
+            'status': o.status.capitalize() if hasattr(o, 'status') else 'Pending'
         } for o in recent_orders_qs]
 
         salesman_data = {
@@ -986,10 +1025,21 @@ def salesman_detail_api(request, pk):
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
+
+
+
+
+
+
+
+
+
+# salesman_update_api
 @csrf_exempt
 def salesman_update_api(request, pk):
     if request.method == 'PUT':
         try:
+            # 👈 ફેરફાર: અહીં role='salesman' પાછું ઉમેર્યું છે
             salesman = get_object_or_404(User, pk=pk, role='salesman')
             data = json.loads(request.body)
             
@@ -1005,27 +1055,326 @@ def salesman_update_api(request, pk):
                 elif hasattr(salesman, 'phone'):
                     salesman.phone = phone_val
                 
-            # 2. Role Update
-            if hasattr(salesman, 'role'):
-                salesman.role = data.get('role', salesman.role)
-                
-            # 3. Status Update
+            # 2. Status Update
             status_val = data.get('status', 'Active')
             salesman.is_active = True if status_val == 'Active' else False
             salesman.save()
             
-            # 4. Assigned Route Update
+            # 3. Assigned Route Update
             route_name = data.get('assigned_route')
             if route_name:
                 if route_name == 'Unassigned':
-                    # જો અનએસ્સાઇન કરવાનું હોય તો રૂટ સાથેનો સંબંધ હટાવી શકો છો
-                    pass
+                    for r in Route.objects.filter(salesman=salesman):
+                        r.salesman = None
+                        r.save()
                 else:
                     route_obj, created = Route.objects.get_or_create(name=route_name)
-                    route_obj.salesman = salesman
-                    route_obj.save()
+                    if hasattr(route_obj, 'salesman'):
+                        route_obj.salesman = salesman
+                        route_obj.save()
                 
             return JsonResponse({'success': True, 'message': 'Profile updated successfully'})
         except Exception as e:
             return JsonResponse({'success': False, 'error': str(e)}, status=500)
     return JsonResponse({'success': False, 'error': 'Invalid method'}, status=400)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def shopkeepers_page_api(request):
+    try:
+        search_query = request.GET.get('search', '').strip()
+        status_filter = request.GET.get('status', 'All')
+        salesman_filter = request.GET.get('salesman', 'All')
+        route_filter = request.GET.get('route', 'All')
+        time_filter = request.GET.get('timeFilter', 'This Month')
+
+        now = timezone.now()
+        if time_filter == 'This Year':
+            start_date = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif time_filter == 'Today':
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else: # Default This Month
+            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        customers_qs = Customer.objects.all().select_related('user', 'route', 'route__salesman').order_by('-id')
+
+        if search_query:
+            customers_qs = customers_qs.filter(
+                Q(shop_name__icontains=search_query) |
+                Q(owner_name__icontains=search_query) |
+                Q(city__icontains=search_query)
+            ).distinct()
+
+        if status_filter != 'All':
+            is_active_val = True if status_filter == 'Active' else False
+            customers_qs = customers_qs.filter(status=is_active_val)
+
+        if salesman_filter != 'All':
+            customers_qs = customers_qs.filter(route__salesman__username__iexact=salesman_filter)
+
+        if route_filter != 'All':
+            customers_qs = customers_qs.filter(Q(route__name__iexact=route_filter) | Q(route__route_id__iexact=route_filter))
+
+        total_shopkeepers = Customer.objects.count()
+        active_shopkeepers = Customer.objects.filter(status=True).count()
+        
+        # --- ૧. આજની પેન્ડિંગ વિઝિટ્સ કેલ્ક્યુલેશન (જે વિઝિટ પૂરી થઈ ગઈ હોય તે બાદ થઈ જશે) ---
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+        
+        # આજની કુલ સુનિશ્ચિત (scheduled) અથવા પેન્ડિંગ વિઝિટ્સમાંથી જે કમ્પ્લીટ થઈ ગઈ છે તેને બાદ કરો
+        pending_visits_count = Visit.objects.filter(
+            created_at__gte=today_start, 
+            created_at__lt=today_end
+        ).exclude(status__in=['completed', 'done', 'closed']).count()
+
+        # જો આજની ડેટ માટે કોઈ વિઝિટ એન્ટ્રી ન હોય તો પ્લાન્ડ કે એક્ટિવ વિઝિટ્સ ગણો
+        if pending_visits_count == 0:
+            pending_visits_count = Visit.objects.filter(status__in=['plan', 'started', 'pending']).count()
+
+        # --- ૨. આ મહિનાની કુલ ઓર્ડર વેલ્યુ કેલ્ક્યુલેશન ---
+        month_orders = Order.objects.filter(created_at__gte=start_date)
+        total_orders_amount = month_orders.aggregate(t=Sum('grand_total'))['t'] or 0
+        
+        if total_orders_amount == 0:
+            # જો grand_total ફીડ ન થતું હોય તો total_amount ટ્રાય કરો
+            total_orders_amount = month_orders.aggregate(t=Sum('total_amount'))['t'] or 0
+
+        if total_orders_amount < 100000:
+            orders_str = f"₹{float(total_orders_amount):,.0f}"
+        else:
+            orders_str = f"₹{float(total_orders_amount)/100000:,.2f}L"
+
+        shopkeepers_data = []
+        for cust in customers_qs:
+            orders_count = Order.objects.filter(customer=cust).count()
+            
+            shopkeepers_data.append({
+                'id': cust.id,
+                'shopName': cust.shop_name or '',
+                'shopkeeper': cust.owner_name or '',
+                'ownerName': cust.owner_name or '',
+                'businessType': getattr(cust, 'business_type', ''),
+                'gstNumber': getattr(cust, 'gst_number', ''),
+                'address': cust.address or '',
+                'area': cust.area or '',
+                'city': cust.city or '',
+                'state': cust.state or '',
+                'pincode': cust.pincode or '',
+                'creditLimit': str(getattr(cust, 'credit_limit', '50000')),
+                'salesman': cust.route.salesman.username if (cust.route and cust.route.salesman) else 'Unassigned',
+                'route': cust.route.route_id if (cust.route and cust.route.route_id) else (cust.route.name if cust.route else 'N/A'),
+                'outstanding': f"₹{float(cust.outstanding_amount or 0):,.0f}",
+                'orders': orders_count,
+                'status': 'Active' if cust.status else 'Inactive'
+            })
+
+        return JsonResponse({
+            'success': True,
+            'metrics': {
+                'totalShopkeepers': total_shopkeepers,
+                'activeShopkeepers': active_shopkeepers,
+                'pendingVisits': pending_visits_count,
+                'ordersThisMonth': orders_str
+            },
+            'shopkeepers': shopkeepers_data,
+            'dropdowns': {
+                'salesmen': list(User.objects.filter(role='salesman').values_list('username', flat=True).distinct()),
+                'routes': list(Route.objects.values_list('name', flat=True).distinct())
+            }
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+
+    
+
+
+@csrf_exempt
+def shopkeeper_update_api(request, pk):
+    if request.method == 'PUT':
+        try:
+            data = json.loads(request.body)
+            customer = get_object_or_404(Customer, pk=pk)
+            
+            customer.shop_name = data.get('shopName', customer.shop_name)
+            owner = data.get('shopkeeper') or data.get('ownerName', customer.owner_name)
+            customer.owner_name = owner
+            customer.business_type = data.get('businessType', customer.business_type)
+            customer.gst_number = data.get('gstNumber', customer.gst_number)
+            customer.address = data.get('address', customer.address)
+            customer.area = data.get('area', customer.area)
+            customer.city = data.get('city', customer.city)
+            customer.state = data.get('state', customer.state)
+            customer.pincode = data.get('pincode', customer.pincode)
+            customer.credit_limit = data.get('creditLimit', customer.credit_limit)
+            customer.status = True if data.get('status', 'Active') == 'Active' else False
+
+            route_name = data.get('route')
+            if route_name:
+                route_obj = Route.objects.filter(Q(name__iexact=route_name) | Q(route_id__iexact=route_name)).first()
+                if route_obj:
+                    customer.route = route_obj
+
+            salesman_name = data.get('salesman')
+            if salesman_name and customer.route:
+                salesman_obj = User.objects.filter(username__iexact=salesman_name, role='salesman').first()
+                if salesman_obj:
+                    customer.route.salesman = salesman_obj
+                    customer.route.save()
+
+            customer.save()
+            return JsonResponse({'success': True, 'message': 'Shopkeeper updated successfully'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+    return JsonResponse({'success': False, 'error': 'Invalid method'}, status=400)
+
+
+
+
+
+
+
+@csrf_exempt
+def shopkeeper_create_api(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            shop_name = data.get('shopName')
+            owner_name = data.get('shopkeeper') or data.get('ownerName')
+            salesman_name = data.get('salesman')
+            route_name = data.get('route')
+            business_type = data.get('businessType', '')
+            gst_number = data.get('gstNumber', '')
+            address = data.get('address', 'N/A')
+            area = data.get('area', 'N/A')
+            city = data.get('city', 'Ahmedabad')
+            state = data.get('state', 'Gujarat')
+            pincode = data.get('pincode', '380001')
+            credit_limit = data.get('creditLimit', 50000.00)
+            status_val = True if data.get('status', 'Active') == 'Active' else False
+
+            salesman_obj = User.objects.filter(username__iexact=salesman_name, role='salesman').first()
+            route_obj = Route.objects.filter(Q(name__iexact=route_name) | Q(route_id__iexact=route_name)).first()
+
+            if route_obj and not route_obj.salesman and salesman_obj:
+                route_obj.salesman = salesman_obj
+                route_obj.save()
+
+            user_obj, created = User.objects.get_or_create(
+                username=owner_name.replace(" ", "").lower() if owner_name else 'shopkeeper',
+                defaults={'role': 'shopkeeper', 'is_active': status_val}
+            )
+
+            customer = Customer.objects.create(
+                user=user_obj,
+                shop_name=shop_name,
+                owner_name=owner_name,
+                business_type=business_type,
+                gst_number=gst_number,
+                address=address,
+                area=area,
+                city=city,
+                state=state,
+                pincode=pincode,
+                credit_limit=credit_limit,
+                route=route_obj,
+                status=status_val
+            )
+
+            return JsonResponse({'success': True, 'message': 'Shopkeeper added successfully', 'id': customer.id})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+    return JsonResponse({'success': False, 'error': 'Invalid method'}, status=400)
+
+
+
+
+
+
+
+
+def shopkeeper_detail_api(request, pk):
+    try:
+        customer = get_object_or_404(Customer, pk=pk)
+        
+        # કુલ ઓર્ડર્સ અને પર્ચેઝ ગણતરી
+        cust_orders = Order.objects.filter(customer=customer).order_by('-created_at')
+        total_orders_count = cust_orders.count()
+        total_purchase_val = cust_orders.aggregate(t=Sum('grand_total'))['t'] or 0
+        
+        last_order = cust_orders.first()
+        last_order_date = last_order.created_at.strftime('%d %b %Y') if last_order else 'N/A'
+        last_order_amt = f"₹{float(last_order.grand_total):,.0f}" if last_order else '₹0'
+
+        # તાજેતરના ઓર્ડર્સ લિસ્ટ
+        orders_data = []
+        for ord_obj in cust_orders[:10]:
+            orders_data.append({
+                'orderId': f"#ORD-{ord_obj.id + 1000}",
+                'date': ord_obj.created_at.strftime('%d %b %Y'),
+                'items': getattr(ord_obj, 'items_summary', 'Products'),
+                'orderValue': f"₹{float(ord_obj.grand_total):,.0f}",
+                'payment': getattr(ord_obj, 'payment_status', 'Paid'),
+                'status': getattr(ord_obj, 'status', 'Completed')
+            })
+
+        # તાજેતરની વિઝિટ્સ લિસ્ટ
+        cust_visits = Visit.objects.filter(customer=customer).order_by('-created_at')[:10]
+        visits_data = []
+        for v in cust_visits:
+            visits_data.append({
+                'date': v.created_at.strftime('%d %b %Y'),
+                'salesman': v.salesman.username if v.salesman else 'N/A',
+                'purpose': getattr(v, 'purpose', 'Order Visit'),
+                'outcome': getattr(v, 'outcome', 'Completed')
+            })
+
+        shopkeeper_info = {
+            'id': customer.id,
+            'initials': "".join([n[0] for n in customer.owner_name.split()[:2]]).upper() if customer.owner_name else 'SK',
+            'name': customer.owner_name or 'N/A',
+            'shopName': customer.shop_name or 'N/A',
+            'location': f"{customer.area or ''}, {customer.city or ''}, {customer.state or ''}".strip(', '),
+            'assignedSalesman': customer.route.salesman.username if (customer.route and customer.route.salesman) else 'Unassigned',
+            'ownerName': customer.owner_name or 'N/A',
+            'email': getattr(customer, 'email', f"{customer.owner_name.lower().replace(' ', '')}@gmail.com") if customer.owner_name else 'N/A',
+            'phone': getattr(customer, 'phone', '+91 98765 43210'),
+            'shopType': getattr(customer, 'business_type', 'General Store'),
+            'shopAddress': customer.address or 'N/A',
+            'joinedDate': customer.created_at.strftime('%d %B %Y') if hasattr(customer, 'created_at') else '12 January 2026',
+            'status': 'Active' if customer.status else 'Inactive'
+        }
+
+        metrics_data = {
+            'totalOrders': total_orders_count,
+            'ordersGrowth': f"+{total_orders_count} total",
+            'totalPurchase': f"₹{float(total_purchase_val):,.0f}",
+            'purchasePeriod': 'This year',
+            'outstanding': f"₹{float(customer.outstanding_amount or 0):,.0f}",
+            'outstandingStatus': 'Payment due' if customer.outstanding_amount > 0 else 'Clear',
+            'lastOrderDate': last_order_date,
+            'lastOrderAmount': last_order_amt
+        }
+
+        return JsonResponse({
+            'success': True,
+            'shopkeeper': shopkeeper_info,
+            'metrics': metrics_data,
+            'recentOrders': orders_data,
+            'recentVisits': visits_data
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)

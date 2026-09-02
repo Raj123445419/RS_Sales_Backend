@@ -65,6 +65,7 @@ class Product(models.Model):
         Category, on_delete=models.CASCADE, related_name='products'
     )
     image = models.ImageField(upload_to='products/', blank=True, null=True)
+    size = models.CharField(max_length=200, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
     unit = models.CharField(max_length=50, default='pcs')  # e.g., pcs, kg, box
     mrp = models.DecimalField(max_digits=10, decimal_places=2)
@@ -77,6 +78,7 @@ class Product(models.Model):
     low_stock_limit = models.PositiveIntegerField(default=5)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    
 
     def __str__(self):
         return f'{self.name} - {self.sku}'

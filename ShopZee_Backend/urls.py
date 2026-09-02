@@ -42,6 +42,11 @@ urlpatterns = [
     path('api/v1/orders/<int:order_id>/update/', views.update_order_api, name='update_order_api'),
     path('api/v1/salesman-detail/<int:pk>/', views.salesman_detail_api, name='salesman_detail_api'),
     path('api/v1/salesman-update/<int:pk>/', views.salesman_update_api, name='salesman_update_api'),
+    path('api/v1/shopkeepers-page/', views.shopkeepers_page_api, name='shopkeepers_page_api'),
+    path('api/v1/shopkeepers-update/<int:pk>/', views.shopkeeper_update_api, name='shopkeeper_update_api'),
+    path('api/v1/shopkeepers-create/', views.shopkeeper_create_api, name='shopkeeper_create_api'),
+    path('api/v1/shopkeeper-detail/<int:pk>/', views.shopkeeper_detail_api, name='shopkeeper_detail_api'),
+
     path('api/v1/', include(router.urls)),
 ]
 
