@@ -46,6 +46,9 @@ urlpatterns = [
     path('api/v1/shopkeepers-update/<int:pk>/', views.shopkeeper_update_api, name='shopkeeper_update_api'),
     path('api/v1/shopkeepers-create/', views.shopkeeper_create_api, name='shopkeeper_create_api'),
     path('api/v1/shopkeeper-detail/<int:pk>/', views.shopkeeper_detail_api, name='shopkeeper_detail_api'),
+    path('api/v1/notifications-page/', views.notifications_page_api, name='notifications_page_api'),
+    path('api/v1/notification-action/<int:pk>/', views.notification_action_api, name='notification_action_api'),
+    path('api/v1/settings/', views.settings_api, name='settings_api'),
 
     path('api/v1/', include(router.urls)),
 ]

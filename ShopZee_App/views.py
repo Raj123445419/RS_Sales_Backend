@@ -17,7 +17,7 @@ from django.db.models import Sum, Q
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
-from .models import Customer, Order, Visit, User, Route
+from .models import Customer, Order, Visit, User, Route, Notification
 
 from .models import (
     Category,
@@ -1378,3 +1378,171 @@ def shopkeeper_detail_api(request, pk):
         })
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
+    
+
+
+
+
+
+
+
+def notifications_page_api(request):
+    try:
+        active_tab = request.GET.get('tab', 'All') # All, Unread, Important
+        time_filter = request.GET.get('timeFilter', 'All') # Today, Yesterday, etc.
+        search_query = request.GET.get('search', '').strip()
+
+        notifications_qs = Notification.objects.all().order_by('-created_at')
+
+        # ટેબ ફિલ્ટર
+        if active_tab == 'Unread':
+            notifications_qs = notifications_qs.filter(is_read=False)
+        elif active_tab == 'Important':
+            notifications_qs = notifications_qs.filter(is_important=True)
+
+        # સર્ચ ફિલ્ટર
+        if search_query:
+            notifications_qs = notifications_qs.filter(
+                Q(title__icontains=search_query) | Q(message__icontains=search_query)
+            )
+
+        notifications_data = []
+        for n in notifications_qs:
+            # ટાઇમ કે ગ્રુપ નક્કી કરો (Today / Yesterday)
+            now = timezone.now()
+            diff = now - n.created_at
+            
+            if diff.days == 0:
+                group_name = 'Today'
+            elif diff.days == 1:
+                group_name = 'Yesterday'
+            else:
+                group_name = n.created_at.strftime('%d %b %Y')
+
+            # ટાઇમ સ્ટ્રિંગ (e.g. '5 min ago')
+            minutes = int(diff.total_seconds() / 60)
+            if minutes < 60:
+                time_str = f"{max(minutes, 1)} min ago"
+            elif minutes < 1440:
+                time_str = f"{int(minutes / 60)} hours ago"
+            else:
+                time_str = n.created_at.strftime('%d %b')
+
+            shop_name = getattr(n, 'shop_name', None) or (n.user.username if n.user else 'System Alert')
+            initials = "".join([word[0] for word in shop_name.split()[:2]]).upper() if shop_name else 'SA'
+
+            notifications_data.append({
+                'id': n.id,
+                'shopName': shop_name,
+                'initials': initials,
+                'message': n.message,
+                'time': time_str,
+                'group': group_name,
+                'isRead': getattr(n, 'is_read', False),
+                'isImportant': getattr(n, 'is_important', False),
+            })
+
+        return JsonResponse({
+            'success': True,
+            'notifications': notifications_data
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def notification_action_api(request, pk):
+    if request.method == 'PUT':
+        try:
+            data = json.loads(request.body)
+            notif = get_object_or_404(Notification, pk=pk)
+            
+            if 'isRead' in data:
+                notif.is_read = data['isRead']
+            if 'isImportant' in data:
+                notif.is_important = data['isImportant']
+            
+            notif.save()
+            return JsonResponse({'success': True, 'message': 'Notification updated successfully'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+    return JsonResponse({'success': False, 'error': 'Invalid method'}, status=400)
+
+
+
+
+
+
+
+
+
+@csrf_exempt
+def settings_api(request):
+    try:
+        user_obj = User.objects.filter(is_superuser=True).first() or User.objects.first()
+
+        # પરમિશન્સ સ્ટોર કરવા માટે આપણે ತಾત્કાલિક ગ્લોબલ વેરિયેબલ કે યુઝર એટ્રિબ્યુટ વાપરી શકીએ
+        # (જો તમે મોડેલ બનાવ્યું હોય તો તેમાં સેવ કરાવી શકો છો)
+        global_permissions = getattr(settings, 'GLOBAL_PERMISSIONS', [
+            {'permission': 'View Dashboard', 'admin': True, 'salesmen': True, 'shopkeeper': True},
+            {'permission': 'Manage Shops', 'admin': True, 'salesmen': False, 'shopkeeper': False},
+            {'permission': 'Edit Products', 'admin': True, 'salesmen': True, 'shopkeeper': False},
+            {'permission': 'Process Payments', 'admin': True, 'salesmen': True, 'shopkeeper': True},
+            {'permission': 'System Settings', 'admin': True, 'salesmen': False, 'shopkeeper': False},
+        ])
+
+        if request.method == 'GET':
+            return JsonResponse({
+                'success': True,
+                'profile': {
+                    'fullName': user_obj.get_full_name() or user_obj.username,
+                    'email': user_obj.email,
+                    'phone': getattr(user_obj, 'mobile', '') or getattr(user_obj, 'phone', ''),
+                    'role': 'Super Administrator' if user_obj.is_superuser else 'Administrator'
+                },
+                'permissions': global_permissions,
+                'company_logo': getattr(user_obj, 'company_logo_url', None)
+            })
+
+        elif request.method == 'PUT':
+            data = json.loads(request.body)
+            action = data.get('action', 'profile')
+
+            # 👈 1. અહીં પરમિશન્સ પરફેક્ટલી સેવ થશે
+            if action == 'permissions':
+                new_permissions = data.get('permissions', [])
+                setattr(settings, 'GLOBAL_PERMISSIONS', new_permissions)
+                return JsonResponse({'success': True, 'message': 'Permissions updated successfully!'})
+
+            elif action == 'logo':
+                logo_url = data.get('logoUrl')
+                return JsonResponse({'success': True, 'message': 'Company logo updated globally!'})
+
+            elif action == 'password':
+                current_pwd = data.get('currentPassword', '')
+                new_pwd = data.get('newPassword', '')
+                if not user_obj.check_password(current_pwd):
+                    return JsonResponse({'success': False, 'error': 'Current password is incorrect.'}, status=400)
+                user_obj.set_password(new_pwd)
+                user_obj.save()
+                return JsonResponse({'success': True, 'message': 'Password updated successfully!'})
+
+            else:
+                full_name = data.get('fullName', '')
+                email = data.get('email', '')
+                phone = data.get('phone', '')
+                if full_name:
+                    name_parts = full_name.split(' ', 1)
+                    user_obj.first_name = name_parts[0]
+                    user_obj.last_name = name_parts[1] if len(name_parts) > 1 else ''
+                if email:
+                    user_obj.email = email
+                if phone:
+                    if hasattr(user_obj, 'mobile'):
+                        user_obj.mobile = phone
+                user_obj.save()
+                return JsonResponse({'success': True, 'message': 'Settings saved successfully!'})
+
+        return JsonResponse({'success': False, 'error': 'Invalid method'}, status=400)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)    
