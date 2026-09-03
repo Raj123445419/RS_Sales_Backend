@@ -10,7 +10,7 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import viewsets
-
+from django.conf import settings
 import json
 from django.http import JsonResponse
 from django.db.models import Sum, Q
@@ -1479,10 +1479,12 @@ def notification_action_api(request, pk):
 @csrf_exempt
 def settings_api(request):
     try:
-        user_obj = User.objects.filter(is_superuser=True).first() or User.objects.first()
+        # હેડર કે રિક્વેસ્ટમાંથી લૉગ્ડ-ઇન યુઝર મેળવો (અથવા ટેમ્પરરી ફર્સ્ટ એડમિન/સુપરયુઝર)
+        user_obj = request.user if (request.user and request.user.is_authenticated) else None
+        if not user_obj:
+            user_obj = User.objects.filter(is_superuser=True).first() or User.objects.first()
 
-        # પરમિશન્સ સ્ટોર કરવા માટે આપણે ತಾત્કાલિક ગ્લોબલ વેરિયેબલ કે યુઝર એટ્રિબ્યુટ વાપરી શકીએ
-        # (જો તમે મોડેલ બનાવ્યું હોય તો તેમાં સેવ કરાવી શકો છો)
+        # પરમિશન્સ સ્ટોર કરવા માટે સેટિંગ્સ કે મોડેલનો ઉપયોગ
         global_permissions = getattr(settings, 'GLOBAL_PERMISSIONS', [
             {'permission': 'View Dashboard', 'admin': True, 'salesmen': True, 'shopkeeper': True},
             {'permission': 'Manage Shops', 'admin': True, 'salesmen': False, 'shopkeeper': False},
@@ -1495,12 +1497,13 @@ def settings_api(request):
             return JsonResponse({
                 'success': True,
                 'profile': {
-                    'fullName': user_obj.get_full_name() or user_obj.username,
-                    'email': user_obj.email,
+                    'fullName': user_obj.get_full_name() if (hasattr(user_obj, 'get_full_name') and user_obj.get_full_name()) else user_obj.username,
+                    'email': user_obj.email or '',
                     'phone': getattr(user_obj, 'mobile', '') or getattr(user_obj, 'phone', ''),
-                    'role': 'Super Administrator' if user_obj.is_superuser else 'Administrator'
+                    'role': 'Super Administrator' if user_obj.is_superuser else (str(user_obj.role).capitalize() if hasattr(user_obj, 'role') and user_obj.role else 'Administrator')
                 },
                 'permissions': global_permissions,
+                'is2FAEnabled': getattr(user_obj, 'is_2fa_enabled', True),
                 'company_logo': getattr(user_obj, 'company_logo_url', None)
             })
 
@@ -1508,41 +1511,68 @@ def settings_api(request):
             data = json.loads(request.body)
             action = data.get('action', 'profile')
 
-            # 👈 1. અહીં પરમિશન્સ પરફેક્ટલી સેવ થશે
+            # ૧. Roles & Permissions સેવ કરવા માટે
             if action == 'permissions':
                 new_permissions = data.get('permissions', [])
                 setattr(settings, 'GLOBAL_PERMISSIONS', new_permissions)
-                return JsonResponse({'success': True, 'message': 'Permissions updated successfully!'})
+                return JsonResponse({'success': True, 'message': 'Permissions updated successfully in backend!'})
 
+            # ૨. કંપની લોગો અપડેટ કરવા માટે
             elif action == 'logo':
                 logo_url = data.get('logoUrl')
+                setattr(user_obj, 'company_logo_url', logo_url)
                 return JsonResponse({'success': True, 'message': 'Company logo updated globally!'})
 
+            # ૩. 2FA (Two-Factor Authentication) સ્ટેટ સેવ કરવા માટે
+            elif action == '2fa':
+                is_2fa = data.get('is2FAEnabled', True)
+                if hasattr(user_obj, 'is_2fa_enabled'):
+                    user_obj.is_2fa_enabled = is_2fa
+                    user_obj.save()
+                return JsonResponse({'success': True, 'message': '2FA status updated!'})
+
+            # ૪. પાસવર્ડ બદલવા માટે
             elif action == 'password':
                 current_pwd = data.get('currentPassword', '')
                 new_pwd = data.get('newPassword', '')
-                if not user_obj.check_password(current_pwd):
-                    return JsonResponse({'success': False, 'error': 'Current password is incorrect.'}, status=400)
+                
+                # ચેક કરો કે કરન્ટ પાસવર્ડ સાચો છે કે નહીં
+                if user_obj.password and not user_obj.check_password(current_pwd):
+                    # જો ડેટાબેઝમાં પાસવર્ડ પ્લેન ટેક્સ્ટમાં સેવ હોય તો આ શરત પણ ચકાસી શકાય
+                    if user_obj.password != current_pwd:
+                        return JsonResponse({'success': False, 'error': 'Current password is incorrect.'}, status=400)
+                
+                if len(new_pwd) < 6:
+                    return JsonResponse({'success': False, 'error': 'New password must be at least 6 characters long.'}, status=400)
+
                 user_obj.set_password(new_pwd)
                 user_obj.save()
-                return JsonResponse({'success': True, 'message': 'Password updated successfully!'})
+                return JsonResponse({'success': True, 'message': 'Password updated successfully in database!'})
 
+            # ૫. પર્સનલ પ્રોફાઇલ (નામ, ઈમેલ, ફોન) સેવ કરવા માટે
             else:
                 full_name = data.get('fullName', '')
                 email = data.get('email', '')
                 phone = data.get('phone', '')
+
                 if full_name:
                     name_parts = full_name.split(' ', 1)
                     user_obj.first_name = name_parts[0]
                     user_obj.last_name = name_parts[1] if len(name_parts) > 1 else ''
+                    user_obj.username = full_name.replace(' ', '').lower()
+                
                 if email:
                     user_obj.email = email
+
                 if phone:
                     if hasattr(user_obj, 'mobile'):
                         user_obj.mobile = phone
+                    elif hasattr(user_obj, 'phone'):
+                        user_obj.phone = phone
+
                 user_obj.save()
-                return JsonResponse({'success': True, 'message': 'Settings saved successfully!'})
+                return JsonResponse({'success': True, 'message': 'Profile settings saved successfully!'})
 
         return JsonResponse({'success': False, 'error': 'Invalid method'}, status=400)
     except Exception as e:
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)    
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)

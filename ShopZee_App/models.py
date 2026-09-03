@@ -132,10 +132,10 @@ class Customer(models.Model):
         related_name='customers',
     )
     credit_limit = models.DecimalField(
-        max_digits=12, decimal_places=2, default=50000.00
+        max_digits=1000, decimal_places=2, default=50000.00
     )
     outstanding_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0.00
+        max_digits=1000, decimal_places=2, default=0.00
     )
     status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -220,31 +220,31 @@ class Order(models.Model):
     )
 
     subtotal = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0.00
+        max_digits=1000, decimal_places=2, default=0.00
     )
 
     discount_value = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0.00
+        max_digits=1000, decimal_places=2, default=0.00
     )
     discount_type = models.CharField(
-        max_length=10, choices=DISCOUNT_TYPE_CHOICES, default='rs'
+        max_length=1000, choices=DISCOUNT_TYPE_CHOICES, default='rs'
     )
     calculated_discount_amount = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0.00, editable=False
+        max_digits=1000, decimal_places=2, default=0.00, editable=False
     )
 
     tax_value = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0.00
+        max_digits=1000, decimal_places=2, default=0.00
     )
     tax_type = models.CharField(
-        max_length=10, choices=TAX_TYPE_CHOICES, default='percent'
+        max_length=1000, choices=TAX_TYPE_CHOICES, default='percent'
     )
     calculated_tax_amount = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0.00, editable=False
+        max_digits=1000, decimal_places=2, default=0.00, editable=False
     )
 
     grand_total = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0.00, editable=False
+        max_digits=1000, decimal_places=2, default=0.00, editable=False
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -302,8 +302,8 @@ class OrderItem(models.Model):
     )
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    item_total = models.DecimalField(max_digits=12, decimal_places=2)
+    price = models.DecimalField(max_digits=100, decimal_places=2)
+    item_total = models.DecimalField(max_digits=1000, decimal_places=2)
 
     def save(self, *args, **kwargs):
         # જો પ્રાઇસ મેન્યુઅલ નાખી ન હોય તો પ્રોડક્ટની સેલિંગ પ્રાઇસ લેવી
@@ -357,19 +357,19 @@ class Payment(models.Model):
         Customer, on_delete=models.CASCADE, related_name='payments'
     )
     total_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0.00, editable=False
+        max_digits=1000, decimal_places=2, default=0.00, editable=False
     )
     paid_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0.00
+        max_digits=1000, decimal_places=2, default=0.00
     )
     pending_amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0.00, editable=False
+        max_digits=1000, decimal_places=2, default=0.00, editable=False
     )
     payment_method = models.CharField(
-        max_length=30, choices=PAYMENT_METHODS, default='cash'
+        max_length=1000, choices=PAYMENT_METHODS, default='cash'
     )
     payment_status = models.CharField(
-        max_length=20, choices=PAYMENT_STATUS, default='pending'
+        max_length=1000, choices=PAYMENT_STATUS, default='pending'
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -407,9 +407,9 @@ class Ledger(models.Model):
     )
     date = models.DateTimeField(auto_now_add=True)
     description = models.CharField(max_length=255)
-    debit = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
-    credit = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
-    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    debit = models.DecimalField(max_digits=100, decimal_places=2, default=0.00)
+    credit = models.DecimalField(max_digits=100, decimal_places=2, default=0.00)
+    balance = models.DecimalField(max_digits=100, decimal_places=2, default=0.00)
 
     def __str__(self, *args, **kwargs):
         return (
