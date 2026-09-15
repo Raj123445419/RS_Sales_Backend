@@ -2,10 +2,10 @@ from decimal import Decimal
 from django.contrib.auth.models import AbstractUser, Group, Permission
 from django.db import models
 
-# Create your models here.
 
 
-# 1. Custom User Model (સેલ્સમેન માટે monthly_target ઉમેરેલ છે)
+
+# User Model 
 class User(AbstractUser):
     ROLE_CHOICES = (
         ('admin', 'Admin'),
@@ -15,10 +15,10 @@ class User(AbstractUser):
     role = models.CharField(
         max_length=20, choices=ROLE_CHOICES, default='shopkeeper'
     )
-    mobile = models.CharField(max_length=15, unique=True, null=True, blank=True)
+    mobile = models.CharField(max_length=15, unique=True)
     monthly_target = models.DecimalField(
         max_digits=12, decimal_places=2, default=50000.00
-    )  # સેલ્સમેનના ડેશબોર્ડ ટાર્ગેટ માટે
+    ) 
     is_active = models.BooleanField(default=True)
 
     # Added related_name to avoid clashes with default auth.User
@@ -357,13 +357,13 @@ class Payment(models.Model):
         Customer, on_delete=models.CASCADE, related_name='payments'
     )
     total_amount = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00, editable=False
+        max_digits=10, decimal_places=2, default=0.00, editable=False
     )
     paid_amount = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00
+        max_digits=10, decimal_places=2, default=0.00
     )
     pending_amount = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00, editable=False
+        max_digits=10, decimal_places=2, default=0.00, editable=False
     )
     payment_method = models.CharField(
         max_length=1000, choices=PAYMENT_METHODS, default='cash'
