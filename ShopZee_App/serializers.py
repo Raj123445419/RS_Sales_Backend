@@ -1,17 +1,6 @@
 from rest_framework import serializers
-from .models import (
-    Category,
-    Customer,
-    Ledger,
-    Notification,
-    Order,
-    OrderItem,
-    Payment,
-    Product,
-    Route,
-    User,
-    Visit,
-)
+from .models import Category, Customer, Ledger, Notification, Order, OrderItem, Payment, Product, Route, User, Visit
+
 
 
 class UserSerializer(serializers.ModelSerializer):

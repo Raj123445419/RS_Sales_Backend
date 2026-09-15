@@ -67,7 +67,7 @@ class Product(models.Model):
     image = models.ImageField(upload_to='products/', blank=True, null=True)
     size = models.CharField(max_length=200, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
-    unit = models.CharField(max_length=50, default='pcs')  # e.g., pcs, kg, box
+    unit = models.CharField(max_length=50, default='pcs')
     mrp = models.DecimalField(max_digits=10, decimal_places=2)
     selling_price = models.DecimalField(max_digits=10, decimal_places=2)
     purchase_price = models.DecimalField(
@@ -132,10 +132,10 @@ class Customer(models.Model):
         related_name='customers',
     )
     credit_limit = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=50000.00
+        max_digits=20, decimal_places=2, default=50000.00
     )
     outstanding_amount = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00
+        max_digits=20, decimal_places=2, default=0.00
     )
     status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -200,7 +200,6 @@ class Order(models.Model):
     )
 
     TAX_TYPE_CHOICES = (
-        ('rs', '₹ (Rupees)'),
         ('percent', '% (Percentage)'),
     )
 
@@ -220,50 +219,50 @@ class Order(models.Model):
     )
 
     subtotal = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00
+        max_digits=20, decimal_places=2, default=0.00
     )
 
     discount_value = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00
+        max_digits=20, decimal_places=2, default=0.00
     )
     discount_type = models.CharField(
-        max_length=1000, choices=DISCOUNT_TYPE_CHOICES, default='rs'
+        max_length=20, choices=DISCOUNT_TYPE_CHOICES, default='rs'
     )
     calculated_discount_amount = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00, editable=False
+        max_digits=20, decimal_places=2, default=0.00, editable=False
     )
 
     tax_value = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00
+        max_digits=20, decimal_places=2, default=0.00
     )
     tax_type = models.CharField(
-        max_length=1000, choices=TAX_TYPE_CHOICES, default='percent'
+        max_length=20, choices=TAX_TYPE_CHOICES, default='percent'
     )
     calculated_tax_amount = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00, editable=False
+        max_digits=20, decimal_places=2, default=0.00, editable=False
     )
 
     grand_total = models.DecimalField(
-        max_digits=1000, decimal_places=2, default=0.00, editable=False
+        max_digits=20, decimal_places=2, default=0.00, editable=False
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        # જો ઓર્ડર પહેલેથી ડેટાબેઝમાં હોય, તો તેની સાથે જોડાયેલી તમામ આઇટમ્સનો સરવાળો કરીને સબટોટલ જાતે જ અપડეტ કરી દેવું
+        # order pahelese ho to sub total auto add kr ne keliye
         if self.pk:
             calculated_subtotal = sum(item.item_total for item in self.items.all())
             self.subtotal = calculated_subtotal
 
-        # 1. Discount Calculation (₹ or %)
+        # Discount Calculation
         disc_val = self.discount_value or Decimal('0.00')
         if self.discount_type == 'percent':
             self.calculated_discount_amount = (self.subtotal * disc_val) / Decimal('100.00')
         else:
             self.calculated_discount_amount = disc_val
 
-        # 2. Tax Calculation (₹ or %) applied on subtotal after discount
+        # Tax Calculation
         taxable_amount = self.subtotal - self.calculated_discount_amount
         if taxable_amount < 0:
             taxable_amount = Decimal('0.00')
@@ -274,12 +273,12 @@ class Order(models.Model):
         else:
             self.calculated_tax_amount = tax_val
 
-        # 3. Grand Total Automatic Calculation
+        # Grand Total Automatic Calculation
         self.grand_total = taxable_amount + self.calculated_tax_amount
 
         super().save(*args, **kwargs)
 
-        # 4. AUTO PAYMENT RECORD CREATION & SYNC
+        # AUTO PAYMENT RECORD CREATION
         payment_obj, created = Payment.objects.get_or_create(
             order=self,
             defaults={

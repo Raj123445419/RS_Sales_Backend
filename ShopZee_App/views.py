@@ -1,50 +1,15 @@
-from datetime import datetime, timedelta
-import json
+from datetime import timedelta
 from decimal import Decimal
-from django.db.models import Q
-from django.contrib.auth import authenticate, get_user_model  # આ લાઈન પરફેક્ટ છે
-from django.db.models import Count, Sum
+import json
+from django.conf import settings
+from django.db.models import Q, Sum
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
-from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import viewsets
-from django.conf import settings
-import json
-from django.http import JsonResponse
-from django.db.models import Sum, Q
-from django.utils import timezone
-from django.shortcuts import get_object_or_404
-from django.views.decorators.csrf import csrf_exempt
-from .models import Customer, Order, Visit, User, Route, Notification
-
-from .models import (
-    Category,
-    Customer,
-    Ledger,
-    Notification,
-    Order,
-    OrderItem,
-    Payment,
-    Product,
-    Route,
-    User,
-    Visit,
-)
-from .serializers import (
-    CategorySerializer,
-    CustomerSerializer,
-    LedgerSerializer,
-    NotificationSerializer,
-    OrderItemSerializer,
-    OrderSerializer,
-    PaymentSerializer,
-    ProductSerializer,
-    RouteSerializer,
-    UserSerializer,
-    VisitSerializer,
-)
+from .models import Customer, Order, Visit, User, Route, Notification, Category, Customer, Ledger, Notification, Order, OrderItem, Payment, Product, Route, User, Visit
+from .serializers import CategorySerializer, CustomerSerializer, LedgerSerializer, NotificationSerializer, OrderItemSerializer, OrderSerializer, PaymentSerializer, ProductSerializer, RouteSerializer, UserSerializer, VisitSerializer  
 
 # ViewSets
 class UserViewSet(viewsets.ModelViewSet):

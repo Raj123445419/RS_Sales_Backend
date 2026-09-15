@@ -1,18 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import (
-    User,
-    Category,
-    Product,
-    Route,
-    Customer,
-    Order,
-    OrderItem,
-    Payment,
-    Ledger,
-    Visit,
-    Notification,
-)
+from .models import User, Category, Product, Route, Customer, Order, OrderItem, Payment, Ledger, Visit, Notification
+
 
 
 # 1. Custom User Admin (રોલ, મોબાઈલ અને ટાર્ગેટ સાથે)
