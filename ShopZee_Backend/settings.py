@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'corsheaders',
     'ShopZee_App',
+    'Admin',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
