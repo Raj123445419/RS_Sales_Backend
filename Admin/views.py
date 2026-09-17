@@ -1,7 +1,7 @@
 from decimal import Decimal
 import json
 from django.shortcuts import render
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, ExpressionWrapper, F, DecimalField
 from datetime import timedelta
 from django.utils import timezone
 from django.http import JsonResponse
@@ -14,106 +14,80 @@ def admin_dashboard_api(request):
     try:
         time_filter = request.GET.get('filter', 'This Week')
         now = timezone.now()
+        today_date = now.date()
+        yesterday_date = today_date - timedelta(days=1)
 
         if time_filter == 'This Month':
-            start_date = now.replace(
-                day=1, hour=0, minute=0, second=0, microsecond=0
-            )
+            start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         elif time_filter == 'This Year':
-            start_date = now.replace(
-                month=1, day=1, hour=0, minute=0, second=0, microsecond=0
-            )
+            start_date = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
         else:
             start_date = now - timedelta(days=7)
 
         # 1. Cards Data
         filtered_orders = Order.objects.filter(created_at__gte=start_date)
-        total_sales = (
-            filtered_orders.aggregate(total=Sum('grand_total'))['total'] or 0
-        )
+        
+        # આજની સેલ્સ અને ગઈકાલની સરખામણી
+        today_sales = Order.objects.filter(created_at__date=today_date).aggregate(total=Sum('grand_total'))['total'] or 0
+        yesterday_sales = Order.objects.filter(created_at__date=yesterday_date).aggregate(total=Sum('grand_total'))['total'] or 0
+
+        sales_diff = float(today_sales) - float(yesterday_sales)
+        if yesterday_sales > 0:
+            sales_change_pct = (sales_diff / float(yesterday_sales)) * 100
+        else:
+            sales_change_pct = 100.0 if today_sales > 0 else 0.0
+        
+        sales_change_str = f"{abs(sales_change_pct):.1f}%"
+        is_sales_positive = sales_change_pct >= 0
+
         total_orders_count = filtered_orders.count()
+        pending_delivery_count = Order.objects.exclude(order_status__in=['delivered', 'cancelled']).count()
+
+        # Shops Data
+        active_customers = Customer.objects.filter(status=True).count()
         total_customers = Customer.objects.count()
 
-        
-        pending_payment = (
-            Payment.objects.aggregate(
-                total_pending=Sum('pending_amount')
-            )['total_pending']
-            or 0
-        )
+        # Stock Value & Low Stock
+        total_stock_value = Product.objects.filter(is_active=True).aggregate(
+            total_value=Sum(ExpressionWrapper(F('current_stock') * F('selling_price'), output_field=DecimalField(max_digits=20, decimal_places=2)))
+        )['total_value'] or 0
 
-        # 2. Sales Chart Data
+        low_stock_count = Product.objects.filter(is_active=True, current_stock__lte=F('low_stock_limit')).count()
+
+        # Payments Data
+        pending_payment = Payment.objects.aggregate(total_pending=Sum('pending_amount'))['total_pending'] or 0
+
+        # 2. Sales Chart Data & Dynamic Max Value
         sales_overview_data = []
+        max_sales_val = 0
+
         if time_filter == 'This Year':
             for m in range(1, 13):
-                m_sales = (
-                    Order.objects.filter(
-                        created_at__year=now.year, created_at__month=m
-                    ).aggregate(total=Sum('grand_total'))['total']
-                    or 0
-                )
+                m_sales = Order.objects.filter(created_at__year=now.year, created_at__month=m).aggregate(total=Sum('grand_total'))['total'] or 0
+                if float(m_sales) > max_sales_val:
+                    max_sales_val = float(m_sales)
                 month_name = timezone.datetime(now.year, m, 1).strftime('%b')
-                sales_overview_data.append(
-                    {'label': month_name, 'value': float(m_sales)}
-                )
+                sales_overview_data.append({'label': month_name, 'value': float(m_sales)})
         elif time_filter == 'This Month':
-            sales_overview_data = [
-                {
-                    'label': 'Week 1',
-                    'value': float(
-                        filtered_orders.filter(
-                            created_at__day__lte=7
-                        ).aggregate(t=Sum('grand_total'))['t']
-                        or 0
-                    ),
-                },
-                {
-                    'label': 'Week 2',
-                    'value': float(
-                        filtered_orders.filter(
-                            created_at__day__gt=7, created_at__day__lte=14
-                        ).aggregate(t=Sum('grand_total'))['t']
-                        or 0
-                    ),
-                },
-                {
-                    'label': 'Week 3',
-                    'value': float(
-                        filtered_orders.filter(
-                            created_at__day__gt=14, created_at__day__lte=21
-                        ).aggregate(t=Sum('grand_total'))['t']
-                        or 0
-                    ),
-                },
-                {
-                    'label': 'Week 4',
-                    'value': float(
-                        filtered_orders.filter(
-                            created_at__day__gt=21
-                        ).aggregate(t=Sum('grand_total'))['t']
-                        or 0
-                    ),
-                },
-            ]
+            w_ranges = [('Week 1', 1, 7), ('Week 2', 8, 14), ('Week 3', 15, 21), ('Week 4', 22, 31)]
+            for label, start_d, end_d in w_ranges:
+                w_sales = filtered_orders.filter(created_at__day__gte=start_d, created_at__day__lte=end_d).aggregate(t=Sum('grand_total'))['t'] or 0
+                if float(w_sales) > max_sales_val:
+                    max_sales_val = float(w_sales)
+                sales_overview_data.append({'label': label, 'value': float(w_sales)})
         else:
             for i in range(6, -1, -1):
-                d = now.date() - timedelta(days=i)
-                d_sales = (
-                    Order.objects.filter(created_at__date=d).aggregate(
-                        total=Sum('grand_total')
-                    )['total']
-                    or 0
-                )
-                sales_overview_data.append(
-                    {'label': d.strftime('%a'), 'value': float(d_sales)}
-                )
+                d = today_date - timedelta(days=i)
+                d_sales = Order.objects.filter(created_at__date=d).aggregate(total=Sum('grand_total'))['total'] or 0
+                if float(d_sales) > max_sales_val:
+                    max_sales_val = float(d_sales)
+                sales_overview_data.append({'label': d.strftime('%a'), 'value': float(d_sales)})
 
-# 3. Top Selling Products 
-        top_items = (
-            OrderItem.objects.values('product__name')
-            .annotate(total_qty=Sum('quantity'))
-            .order_by('-total_qty', 'product__name')[:5]  # -total_qty એટલે સૌથી વધુ વેચાણવાળી પહેલા આવશે
-        )
+        if max_sales_val <= 0:
+            max_sales_val = 50000.0
+
+        # 3. Top Selling Products (મૂળ કલર લૉજિક સાથે)
+        top_items = OrderItem.objects.values('product__name').annotate(total_qty=Sum('quantity')).order_by('-total_qty', 'product__name')[:5]
         
         fallback_colors = ['#3F2B96', '#22C55E', '#DEBA89', '#D71920', '#14B8A6']
         valid_items = [item for item in top_items if item['total_qty'] and item['total_qty'] > 0]
@@ -122,16 +96,10 @@ def admin_dashboard_api(request):
         raw_percentages = []
         for item in valid_items:
             exact_pct = (item['total_qty'] / total_qty_sum * 100) if total_qty_sum > 0 else 0
-            raw_percentages.append({
-                'item': item,
-                'exact': exact_pct,
-                'floor': int(exact_pct),
-                'remainder': exact_pct - int(exact_pct)
-            })
+            raw_percentages.append({'item': item, 'exact': exact_pct, 'floor': int(exact_pct), 'remainder': exact_pct - int(exact_pct)})
 
         current_sum = sum(p['floor'] for p in raw_percentages)
         difference = 100 - current_sum 
-
         raw_percentages.sort(key=lambda x: x['remainder'], reverse=True)
         for i in range(abs(difference)):
             if i < len(raw_percentages):
@@ -162,7 +130,7 @@ def admin_dashboard_api(request):
                 assigned_color = '#84CC16'
             elif 'dew' in name_lower:
                 assigned_color = '#10B981'
-            elif 'maaz' in name_lower:
+            elif 'maaza' in name_lower:
                 assigned_color = '#F7941D'                
             else:
                 assigned_color = fallback_colors[idx % len(fallback_colors)]
@@ -181,86 +149,62 @@ def admin_dashboard_api(request):
         for ord in recent_orders_qs:
             items = ord.items.all()
             first_item = items.first()
+            prod_name = first_item.product.name if first_item else 'N/A'
+            qty_size = f"{first_item.quantity} × {first_item.size}" if first_item and hasattr(first_item, 'size') and first_item.size else (f"{first_item.quantity}" if first_item else 'N/A')
             
-            if first_item:
-                prod_name = first_item.product.name
-                item_size = first_item.size if hasattr(first_item, 'size') and first_item.size else 'N/A'
-                qty_size = f"{first_item.quantity} × {item_size}"
-            else:
-                prod_name = 'N/A'
-                qty_size = 'N/A'
-
             total_items_count = items.count()
-            if total_items_count > 1:
-                prod_display_name = f"{prod_name} + {total_items_count - 1} products"
-            else:
-                prod_display_name = prod_name
+            prod_display_name = f"{prod_name} + {total_items_count - 1} products" if total_items_count > 1 else prod_name
 
-            raw_status = ord.order_status
-            formatted_status = raw_status.replace('_', ' ').title()
-            
             recent_orders_data.append({
                 'id': f"#{ord.id}",
                 'customer': ord.customer.shop_name,
                 'product': prod_display_name,
                 'qty': qty_size,
                 'amount': f"₹{ord.grand_total:,.0f}",
-                'status': formatted_status
+                'status': ord.order_status.replace('_', ' ').title()
             })
 
         # 5. Salesmen Performance
         salesmen = User.objects.filter(role='salesman')
         salesmen_perf_data = []
         for sm in salesmen:
-            sm_orders = Order.objects.filter(salesman=sm)
-            sm_sales = (
-                sm_orders.aggregate(total=Sum('grand_total'))['total'] or 0
-            )
-            target = (
-                float(sm.monthly_target)
-                if hasattr(sm, 'monthly_target') and sm.monthly_target
-                else 50000.0
-            )
-            achiev_pct = (
-                int((float(sm_sales) / target) * 100) if target > 0 else 0
-            )
+            sm_sales = Order.objects.filter(salesman=sm).aggregate(total=Sum('grand_total'))['total'] or 0
+            target = float(sm.monthly_target) if hasattr(sm, 'monthly_target') and sm.monthly_target else 50000.0
+            achiev_pct = int((float(sm_sales) / target) * 100) if target > 0 else 0
 
-            if achiev_pct < 40:
-                bar_color = '#EF4444'  
-            elif achiev_pct <= 75:
-                bar_color = '#F59E0B'   
-            else:
-                bar_color = '#10B981'   
+            bar_color = '#EF4444' if achiev_pct < 40 else ('#F59E0B' if achiev_pct <= 75 else '#10B981')
 
-            salesmen_perf_data.append(
-                {
-                    'name': sm.username,
-                    'sales': f'₹{sm_sales:,.0f}',
-                    'target': f'₹{target:,.0f}',
-                    'achiev': f'{achiev_pct}%',
-                    'pct': min(achiev_pct, 100),
-                    'barColor': bar_color,   
-                }
-            )
+            salesmen_perf_data.append({
+                'name': sm.username,
+                'sales': f'₹{sm_sales:,.0f}',
+                'target': f'₹{target:,.0f}',
+                'achiev': f'{achiev_pct}%',
+                'pct': min(achiev_pct, 100),
+                'barColor': bar_color,   
+            })
 
-        return JsonResponse(
-            {
-                'success': True,
-                'metrics': {
-                    'total_sales': f'₹{total_sales:,.0f}',
-                    'total_orders': f'{total_orders_count:,}',
-                    'customers': f'{total_customers:,}',
-                    'pending_payment': f'₹{pending_payment:,.0f}',
-                },
-                'salesOverview': sales_overview_data,
-                'recentOrders': recent_orders_data,
-                'topProducts': top_products_data,
-                'salesmenPerformance': salesmen_perf_data,
-            }
-        )
+        return JsonResponse({
+            'success': True,
+            'metrics': {
+                'total_sales': f'₹{today_sales:,.0f}',
+                'sales_change': sales_change_str,
+                'is_sales_positive': is_sales_positive,
+                'total_orders': f'{total_orders_count:,}',
+                'pending_delivery': str(pending_delivery_count),
+                'customers': f'{active_customers:,}',
+                'total_shops': str(total_customers),
+                'total_stock_value': f'₹{total_stock_value:,.0f}',
+                'low_stock_items': str(low_stock_count),
+                'pending_payment': f'₹{pending_payment:,.0f}',
+            },
+            'salesOverview': sales_overview_data,
+            'maxSalesValue': max_sales_val,
+            'recentOrders': recent_orders_data,
+            'topProducts': top_products_data,
+            'salesmenPerformance': salesmen_perf_data,
+        })
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
 
 # Order Api
 def orders_page_api(request):
@@ -442,3 +386,24 @@ def create_order_api(request):
 
 
 
+
+
+
+
+
+def update_product_stock_api(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            product_id = data.get('product_id')
+            add_quantity = int(data.get('quantity', 0))
+
+            product = Product.objects.get(id=product_id)
+            product.current_stock += add_quantity  
+            product.save()
+
+            return JsonResponse({'success': True, 'message': 'Stock updated successfully!', 'new_stock': product.current_stock})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=400)
+    
+    return JsonResponse({'success': False, 'error': 'Invalid method'}, status=405)

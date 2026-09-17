@@ -305,22 +305,50 @@ class OrderItem(models.Model):
     item_total = models.DecimalField(max_digits=1000, decimal_places=2)
 
     def save(self, *args, **kwargs):
-        # જો પ્રાઇસ મેન્યુઅલ નાખી ન હોય તો પ્રોડક્ટની સેલિંગ પ્રાઇસ લેવી
+        # 1. જો પ્રાઇસ મેન્યુઅલ નાખી ન હોય તો પ્રોડક્ટની સેલિંગ પ્રાઇસ લેવી
         if not self.price and self.product:
             self.price = self.product.selling_price
         
-        # આઇટમનું કુલ ટોટલ (પ્રાઇસ × ક્વન્ટિટી) ઓટોમેટિક કેલ્ક્યુલેટ કરવું
+        # 2. આઇટમનું કુલ ટોટલ (પ્રાઇસ × ક્વન્ટિટી) ઓટોમેટિક કેલ્ક્યુલેટ કરવું
         price_val = self.price or Decimal('0.00')
         qty_val = Decimal(str(self.quantity or 1))
         self.item_total = price_val * qty_val
 
+        # 3. સ્ટોક મેનેજમેન્ટ (જ્યારે નવી આઇટમ બને ત્યારે સ્ટોક ઘટાડવો)
+        if not self.pk:
+            # નવો ઓર્ડર પ્લેસ થયો છે, એટલે સ્ટોક માઇનస్ કરો
+            if self.product:
+                if self.product.current_stock >= self.quantity:
+                    self.product.current_stock -= self.quantity
+                else:
+                    self.product.current_stock = 0  # સ્ટોક માઇનસમાં ન જાય
+                self.product.save()
+        else:
+            # જો જૂની આઇટમ અપડેટ થઈ હોય અને ક્વોન્ટિટી બદલાઈ હોય તો તેનો તફાવત (Difference) મેનેજ કરો
+            old_instance = OrderItem.objects.get(pk=self.pk)
+            qty_diff = self.quantity - old_instance.quantity
+            if qty_diff != 0 and self.product:
+                if qty_diff > 0:  # ક્વોન્ટિટી વધી છે, એટલે સ્ટોક વધુ ઘટાડો
+                    if self.product.current_stock >= qty_diff:
+                        self.product.current_stock -= qty_diff
+                    else:
+                        self.product.current_stock = 0
+                else:  # ક્વોન્ટિટી ઘટી છે, એટલે સ્ટોક પાછો ઉમેરો
+                    self.product.current_stock += abs(qty_diff)
+                self.product.save()
+
         super().save(*args, **kwargs)
 
-        # જ્યારે આઇટમ સેવ કે અપડેટ થાય, ત્યારે તેના પેરેન્ટ ઓર્ડરનું સબટોટલ અને ગ્રાન્ડ ટોટલ પણ ઓટોમેટિક રી-કેલ્ક્યુલેટ થઈ જવું જોઈએ
+        # 4. પેરેન્ટ ઓર્ડરનું સબટોટલ અને ગ્રાન્ડ ટોટલ પણ ઓટોમેટિક રી-કેલ્ક્યુલેટ કરવું
         if self.order:
             self.order.save()
 
     def delete(self, *args, **kwargs):
+        # 5. જો ઓર્ડર આઇટમ ડીલીટ થાય, તો તેનો સ્ટોક પાછો પ્રોડક્ટમાં જમા (Restore) થઈ જવો જોઈએ
+        if self.product:
+            self.product.current_stock += self.quantity
+            self.product.save()
+
         order_ref = self.order
         super().delete(*args, **kwargs)
         if order_ref:
